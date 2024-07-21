@@ -17,6 +17,7 @@ import com.zenith.network.server.handler.player.incoming.*;
 import com.zenith.network.server.handler.player.outgoing.ClientCommandsOutgoingHandler;
 import com.zenith.network.server.handler.player.outgoing.SystemChatOutgoingHandler;
 import com.zenith.network.server.handler.player.postoutgoing.LoginPostHandler;
+import com.zenith.network.client.handler.postoutgoing.PostOutgoingResourcePackHandler;
 import com.zenith.network.server.handler.player.postoutgoing.StartConfigurationPostOutgoingHandler;
 import com.zenith.network.server.handler.shared.incoming.*;
 import com.zenith.network.server.handler.shared.outgoing.KeepAliveOutgoingHandler;
@@ -38,6 +39,7 @@ import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.*;
 import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundClientInformationPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundKeepAlivePacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundPongPacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundResourcePackPacket;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundFinishConfigurationPacket;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundRegistryDataPacket;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundUpdateEnabledFeaturesPacket;
@@ -113,6 +115,7 @@ public final class ZenithHandlerCodec {
                 .registerInbound(ClientboundKeepAlivePacket.class, CKeepAliveHandler.INSTANCE)
                 .registerInbound(ClientboundDisconnectPacket.class, CDisconnectHandler.INSTANCE)
                 .registerPostOutbound(ServerboundFinishConfigurationPacket.class, new PostOutgoingFinishConfigurationHandler())
+                .registerPostOutbound(ServerboundResourcePackPacket.class, new PostOutgoingResourcePackHandler())
                 .build())
             .state(ProtocolState.GAME, PacketHandlerStateCodec.<ClientSession>builder()
                 .registerInbound(ClientboundDisconnectPacket.class, CDisconnectHandler.INSTANCE)

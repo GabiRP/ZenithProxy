@@ -80,6 +80,17 @@ def setup_execute(config):
     print("")
 
     while True:
+        print("Select server ip to connect to.")
+        add = input("> ")
+        if(add != ""){
+            print("Server address set to", add)
+            break
+        }
+        else:
+            print("Address cannot be empty")
+    print("")
+
+    while True:
         print("Select the type of environment you are running ZenithProxy on.")
         print("1. PC or other computer in your home")
         print("2. VPS or server outside your home")
@@ -194,6 +205,11 @@ def setup_execute(config):
             "port": port,
         },
         "proxyIP": proxy_address,
+    }
+    config["client"] = {
+        "server": {
+            "address":
+        }
     }
 
     if discord_bot:
