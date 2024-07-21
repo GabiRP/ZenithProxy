@@ -19,8 +19,7 @@ val javaLauncherProvider22 = javaToolchains.launcherFor { languageVersion = java
 java { toolchain { languageVersion = javaVersion21 } }
 
 repositories {
-    maven("https://jitpack.io") {
-        name = "jitpack.io"
+    maven("https://maven.2b2t.vc/releases") {
         content { includeGroupByRegex("com.github.rfresh2.*") }
     }
     maven("https://libraries.minecraft.net") {
@@ -72,16 +71,16 @@ dependencies {
     shade("org.slf4j:jul-to-slf4j:2.0.13")
     shade("com.mojang:brigadier:1.2.9")
     shade("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.2")
-    shade("com.github.rfresh2:SimpleEventBus:3c2c6e7a0a")
-    shade("com.github.rfresh2.Discord4j:discord4j-core:8032e232c1") {
+    shade("com.github.rfresh2:SimpleEventBus:1.2")
+    shade("com.github.rfresh2.discord4j:discord4j-core:3.4.2.3") {
         exclude(group = "io.netty")
     }
-    shade("com.github.rfresh2:MCProtocolLib:61cc61b0bb") {
+    shade("com.github.rfresh2:MCProtocolLib:1.20.4.4") {
         exclude(group = "io.netty.incubator")
         exclude(group = "io.netty")
     }
     shade("net.raphimc:MinecraftAuth:4.0.2")
-    val nettyVersion = "4.1.111.Final"
+    val nettyVersion = "4.1.112.Final"
     shade("io.netty:netty-codec-haproxy:$nettyVersion")
     shade("io.netty:netty-codec-dns:$nettyVersion")
     shade("io.netty:netty-codec-http2:$nettyVersion")
@@ -100,14 +99,14 @@ dependencies {
     shade("org.redisson:redisson:3.32.0") {
         exclude(group = "io.netty")
     }
-    val fastutilVersion = "edaf36bfd3"
-    shade("com.github.rfresh2.fastutil:object-object-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil:int-object-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil:object-int-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil:long-object-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil:int-int-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil:reference-object-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil:int-queues:$fastutilVersion")
+    val fastutilVersion = "8.5.14"
+    shade("com.github.rfresh2.fastutil.maps:object-object-maps:$fastutilVersion")
+    shade("com.github.rfresh2.fastutil.maps:int-object-maps:$fastutilVersion")
+    shade("com.github.rfresh2.fastutil.maps:object-int-maps:$fastutilVersion")
+    shade("com.github.rfresh2.fastutil.maps:long-object-maps:$fastutilVersion")
+    shade("com.github.rfresh2.fastutil.maps:int-int-maps:$fastutilVersion")
+    shade("com.github.rfresh2.fastutil.maps:reference-object-maps:$fastutilVersion")
+    shade("com.github.rfresh2.fastutil.queues:int-queues:$fastutilVersion")
     shade("net.raphimc:ViaLoader:3.0.1")
     shade("com.viaversion:viaversion:5.0.1")
     shade("com.viaversion:viabackwards:5.0.1")
