@@ -11,6 +11,7 @@ import com.zenith.network.registry.ClientEventLoopPacketHandler;
 import com.zenith.util.ComponentSerializer;
 import lombok.NonNull;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TranslatableComponent;
 import net.kyori.adventure.text.format.TextColor;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundSystemChatPacket;
 
@@ -33,7 +34,12 @@ public class SystemChatHandler implements ClientEventLoopPacketHandler<Clientbou
                 CHAT_LOG.info(serializedChat);
             }
             final Component component = packet.getContent();
-            final String messageString = ComponentSerializer.serializePlain(component);
+            String messageString = ComponentSerializer.serializePlain(component);
+            if(component instanceof TranslatableComponent comp){
+                Component mComp = comp.arguments().getLast().asComponent().children().getLast().asComponent();
+                //DEFAULT_LOG.atInfo().log(mComp.toString());
+                messageString = ComponentSerializer.serializePlain(mComp);
+            }
             Optional<DeathMessageParseResult> deathMessage = Optional.empty();
             if (!messageString.startsWith("<") && Proxy.getInstance().isOn2b2t())
                 deathMessage = parseDeathMessage2b2t(component, deathMessage, messageString);
