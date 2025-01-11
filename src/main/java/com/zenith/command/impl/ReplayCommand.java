@@ -32,6 +32,8 @@ public class ReplayCommand extends Command {
             
             Replays can optionally be uploaded to discord if they are under the discord message size limit.
             
+            If a replay is too large for discord, it can be uploaded to https://file.io instead if `fileIoUpload` is enabled. 
+            
             A `maxRecordingTime` of 0 means there is no limit, however, recording are always stopped on disconnects.
             
             `autoStart` will automatically start a new recording when the proxy connects.
@@ -42,8 +44,10 @@ public class ReplayCommand extends Command {
                 "start",
                 "stop",
                 "discordUpload on/off",
+                "fileIoUpload on/off",
                 "maxRecordingTime <minutes>",
-                "autoRecordMode <off/proxyConnected/playerConnected>"
+                "autoRecord mode <off/proxyConnected/playerConnected/health>",
+                "autoRecord health <integer>"
             )
         );
     }
@@ -83,29 +87,43 @@ public class ReplayCommand extends Command {
                     .title("Discord Upload " + toggleStrCaps(CONFIG.client.extra.replayMod.sendRecordingsToDiscord));
                 return 1;
             })))
+            .then(literal("fileIoUpload").requires(Command::validateAccountOwner).then(argument("toggle", toggle()).executes(c -> {
+                CONFIG.client.extra.replayMod.fileIOUploadIfTooLarge = getToggle(c, "toggle");
+                c.getSource().getEmbed()
+                    .title("file.io Upload " + toggleStrCaps(CONFIG.client.extra.replayMod.fileIOUploadIfTooLarge));
+                return 1;
+            })))
             .then(literal("maxRecordingTime").then(argument("minutes", integer(0, 60 * 6)).executes(c -> {
                 CONFIG.client.extra.replayMod.maxRecordingTimeMins = getInteger(c, "minutes");
                 c.getSource().getEmbed()
                     .title("Max Recording Time Set");
                 return 1;
             })))
-            .then(literal("autoRecordMode").then(argument("mode", string()).executes(c -> {
-                var modeStr = getString(c, "mode").toLowerCase();
-                var foundMode = Arrays.stream(AutoRecordMode.values())
-                    .filter(mode -> mode.getName().toLowerCase().equals(modeStr))
-                    .findFirst();
-                if (foundMode.isEmpty()) {
-                    c.getSource().getEmbed()
-                        .title("Invalid Mode")
-                        .description("Available Modes: " + Arrays.toString(AutoRecordMode.values()));
-                    return 1;
-                } else {
-                    CONFIG.client.extra.replayMod.autoRecordMode = foundMode.get();
-                    c.getSource().getEmbed()
-                        .title("Auto Record Mode Set");
-                }
-                return 1;
-            })));
+            .then(literal("autoRecord")
+                      .then(literal("mode").then(argument("mode", string()).executes(c -> {
+                          var modeStr = getString(c, "mode").toLowerCase();
+                          var foundMode = Arrays.stream(AutoRecordMode.values())
+                              .filter(mode -> mode.getName().toLowerCase().equals(modeStr))
+                              .findFirst();
+                          if (foundMode.isEmpty()) {
+                              c.getSource().getEmbed()
+                                  .title("Invalid Mode")
+                                  .description("Available Modes: " + Arrays.toString(AutoRecordMode.values()));
+                              return 1;
+                          } else {
+                              MODULE.get(ReplayMod.class).disable();
+                              CONFIG.client.extra.replayMod.autoRecordMode = foundMode.get();
+                              c.getSource().getEmbed()
+                                  .title("Auto Record Mode Set");
+                          }
+                          return 1;
+                      })))
+                      .then(literal("health").then(argument("health", integer(0, 20)).executes(c -> {
+                          CONFIG.client.extra.replayMod.replayRecordingHealthThreshold = getInteger(c, "health");
+                          c.getSource().getEmbed()
+                              .title("Auto Record Health Set");
+                          return 1;
+                      }))));
     }
 
     @Override
@@ -113,6 +131,7 @@ public class ReplayCommand extends Command {
         embed
             .primaryColor()
             .addField("Discord Upload", toggleStr(CONFIG.client.extra.replayMod.sendRecordingsToDiscord), false)
+            .addField("file.io Upload", toggleStr(CONFIG.client.extra.replayMod.fileIOUploadIfTooLarge), false)
             .addField("Max Recording Time", getMaxRecordingTimeStr(), false)
             .addField("Auto Record Mode", CONFIG.client.extra.replayMod.autoRecordMode.getName(), false);
     }

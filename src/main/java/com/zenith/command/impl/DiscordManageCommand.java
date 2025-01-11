@@ -32,17 +32,22 @@ public class DiscordManageCommand extends Command {
         return CommandUsage.args(
             "discord",
             CommandCategory.MANAGE,
-            "Manages the Discord bot's configuration",
+            """
+            Manages the Discord bot's configuration.
+            
+            The relay is configured using the `chatRelay` command
+            """,
             asList(
                 "on/off",
                 "channel <channel ID>",
-                "relayChannel <channel ID>",
                 "token <token>",
                 "role <role ID>",
+                "relayChannel <channelId>",
                 "manageProfileImage on/off",
                 "manageNickname on/off",
                 "manageDescription on/off",
-                "showNonWhitelistIP on/off"
+                "showNonWhitelistIP on/off",
+                "ignoreOtherBots on/off"
             )
         );
     }
@@ -97,8 +102,8 @@ public class DiscordManageCommand extends Command {
                           return 1;
                       })))
             .then(literal("relayChannel")
-                      .then(argument("channel ID", wordWithChars()).executes(c -> {
-                          String channelId = getString(c, "channel ID");
+                      .then(argument("channelId", wordWithChars()).executes(c -> {
+                          String channelId = getString(c, "channelId");
                           if (CHANNEL_ID_PATTERN.matcher(channelId).matches())
                               channelId = channelId.substring(2, channelId.length() - 1);
                           try {
@@ -198,7 +203,15 @@ public class DiscordManageCommand extends Command {
                                          .primaryColor()
                                          .title("Show Non-Whitelist IP " + toggleStrCaps(CONFIG.discord.showNonWhitelistLoginIP));
                             return 1;
-                      })));
+                      })))
+            .then(literal("ignoreOtherBots")
+                      .then(argument("toggle", toggle()).executes(c -> {
+                          CONFIG.discord.ignoreOtherBots = getToggle(c, "toggle");
+                          c.getSource().getEmbed()
+                              .primaryColor()
+                              .title("Ignore Other Bots " + toggleStrCaps(CONFIG.discord.ignoreOtherBots));
+                          return OK;
+            })));
     }
 
     private static boolean validateTerminalSource(CommandContext c) {
@@ -208,26 +221,35 @@ public class DiscordManageCommand extends Command {
     @Override
     public void postPopulate(final Embed builder) {
         builder
+            .addField("Discord Bot", toggleStr(CONFIG.discord.enable) + ((CONFIG.discord.enable && !DISCORD.isRunning()) ? " (Not Running)" : ""), false)
+            .addField("Relay", toggleStr(CONFIG.discord.chatRelay.enable), false)
             .addField("Channel ID", getChannelMention(CONFIG.discord.channelId), false)
             .addField("Relay Channel ID", getChannelMention(CONFIG.discord.chatRelay.channelId), false)
             .addField("Manager Role ID", getRoleMention(CONFIG.discord.accountOwnerRoleId), false)
             .addField("Manage Profile Image", toggleStr(CONFIG.discord.manageProfileImage), false)
             .addField("Manage Nickname", toggleStr(CONFIG.discord.manageNickname), false)
             .addField("Manage Description", toggleStr(CONFIG.discord.manageDescription), false)
-            .addField("Show Non-Whitelist IP", toggleStr(CONFIG.discord.showNonWhitelistLoginIP), false);
+            .addField("Show Non-Whitelist IP", toggleStr(CONFIG.discord.showNonWhitelistLoginIP), false)
+            .addField("Ignore Other Bots", toggleStr(CONFIG.discord.ignoreOtherBots), false);
     }
 
     private String getChannelMention(final String channelId) {
+        if (channelId == null || channelId.isEmpty()) {
+            return "";
+        }
         try {
             return MentionUtil.forChannel(Snowflake.of(channelId));
         } catch (final Exception e) {
             // these channels might be unset on purpose
-            DEFAULT_LOG.debug("Invalid channel ID: " + channelId, e);
+            DEFAULT_LOG.debug("Invalid channel ID: {}", channelId, e);
             return "";
         }
     }
 
     private String getRoleMention(final String roleId) {
+        if (roleId == null || roleId.isEmpty()) {
+            return "";
+        }
         try {
             return MentionUtil.forRole(Snowflake.of(roleId));
         } catch (final NumberFormatException e) {

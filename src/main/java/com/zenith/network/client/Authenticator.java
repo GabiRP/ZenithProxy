@@ -2,7 +2,6 @@ package com.zenith.network.client;
 
 import com.google.gson.JsonObject;
 import com.zenith.event.proxy.MsaDeviceCodeLoginEvent;
-import com.zenith.util.MCAuthLoggerBridge;
 import com.zenith.util.WebBrowserHelper;
 import com.zenith.util.math.MathHelper;
 import lombok.Getter;
@@ -11,25 +10,30 @@ import net.lenni0451.commons.httpclient.HttpClient;
 import net.lenni0451.commons.httpclient.proxy.ProxyHandler;
 import net.lenni0451.commons.httpclient.proxy.ProxyType;
 import net.raphimc.minecraftauth.MinecraftAuth;
+import net.raphimc.minecraftauth.step.java.StepMCProfile;
 import net.raphimc.minecraftauth.step.java.session.StepFullJavaSession;
 import net.raphimc.minecraftauth.step.java.session.StepFullJavaSession.FullJavaSession;
 import net.raphimc.minecraftauth.step.msa.StepCredentialsMsaCode;
-import net.raphimc.minecraftauth.step.msa.StepLocalWebServer;
 import net.raphimc.minecraftauth.step.msa.StepMsaDeviceCode;
 import net.raphimc.minecraftauth.util.MicrosoftConstants;
+import net.raphimc.minecraftauth.util.logging.Slf4jConsoleLogger;
 import org.geysermc.mcprotocollib.auth.GameProfile;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.codec.MinecraftCodec;
 
 import java.io.*;
 import java.nio.file.Files;
+import java.security.KeyPairGenerator;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import static com.zenith.Shared.*;
+import static com.zenith.util.Config.Authentication.AccountType.OFFLINE;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 @Getter
@@ -43,7 +47,7 @@ public class Authenticator {
         .deviceCode()
         .withDeviceToken("Win32")
         .sisuTitleAuthentication(MicrosoftConstants.JAVA_XSTS_RELYING_PARTY)
-        .buildMinecraftJavaProfileStep(false); // for chat signing stuff which we don't implement (yet)
+        .buildMinecraftJavaProfileStep(true);
     @Getter(lazy = true) private final StepFullJavaSession deviceCodeAuthWithoutDeviceTokenStep = MinecraftAuth.builder()
         .withTimeout(300)
         .withClientId(MicrosoftConstants.JAVA_TITLE_ID)
@@ -51,32 +55,23 @@ public class Authenticator {
         .deviceCode()
         .withoutDeviceToken()
         .regularAuthentication(MicrosoftConstants.JAVA_XSTS_RELYING_PARTY)
-        .buildMinecraftJavaProfileStep(false); // for chat signing stuff which we don't implement (yet)
+        .buildMinecraftJavaProfileStep(true);
     @Getter(lazy = true) private final StepFullJavaSession msaAuthStep = MinecraftAuth.builder()
         .withClientId(MicrosoftConstants.JAVA_TITLE_ID).withScope(MicrosoftConstants.SCOPE_TITLE_AUTH)
         .credentials()
         .withDeviceToken("Win32")
         .sisuTitleAuthentication(MicrosoftConstants.JAVA_XSTS_RELYING_PARTY)
-        .buildMinecraftJavaProfileStep(false);
-    @Getter(lazy = true) private final StepFullJavaSession localWebserverStep = MinecraftAuth.builder()
-        .withTimeout(300)
-        // meteor client id lol don't sue me
-        .withClientId("4673b348-3efa-4f6a-bbb6-34e141cdc638").withScope(MicrosoftConstants.SCOPE2)
-        .withRedirectUri("http://127.0.0.1")
-        .localWebServer()
-        .withDeviceToken("Win32")
-        .regularAuthentication(MicrosoftConstants.JAVA_XSTS_RELYING_PARTY)
-        .buildMinecraftJavaProfileStep(false);
+        .buildMinecraftJavaProfileStep(true);
     @Getter(lazy = true) private final StepFullJavaSession prismDeviceCodeAuthStep = MinecraftAuth.builder()
         .withTimeout(300)
         .withClientId("c36a9fb6-4f2a-41ff-90bd-ae7cc92031eb")
         .deviceCode()
         .withoutDeviceToken()
         .regularAuthentication(MicrosoftConstants.JAVA_XSTS_RELYING_PARTY)
-        .buildMinecraftJavaProfileStep(false);
+        .buildMinecraftJavaProfileStep(true);
 
     static {
-        MinecraftAuth.LOGGER = new MCAuthLoggerBridge();
+        MinecraftAuth.LOGGER = new Slf4jConsoleLogger(AUTH_LOG);
     }
 
     private static final File AUTH_CACHE_FILE = new File("mc_auth_cache.json");
@@ -104,6 +99,10 @@ public class Authenticator {
 
     @SneakyThrows
     public MinecraftProtocol login()  {
+        if (CONFIG.authentication.accountType == OFFLINE) {
+            AUTH_LOG.warn("Using offline account: '{}'. Offline accounts will not receive user support.", CONFIG.authentication.username);
+            return createMinecraftProtocol(offlineLogin());
+        }
         var cachedAuth = loadAuthCache()
             .flatMap(this::checkAuthCacheMatchesConfig);
         // throws on failed login
@@ -144,13 +143,17 @@ public class Authenticator {
     }
 
     private boolean shouldUseCachedSessionWithoutRefresh(FullJavaSession session) {
+        var playerCertificates = session.getPlayerCertificates();
+        if (playerCertificates != null && playerCertificates.getExpireTimeMs() < System.currentTimeMillis()) return false;
         return session.getMcProfile().getMcToken().getExpireTimeMs() > System.currentTimeMillis();
     }
 
     private MinecraftProtocol createMinecraftProtocol(FullJavaSession authSession) {
         var javaProfile = authSession.getMcProfile();
         var gameProfile = new GameProfile(javaProfile.getId(), javaProfile.getName());
-        var accessToken = javaProfile.getMcToken().getAccessToken();
+        gameProfile.setPlayerCertificates(authSession.getPlayerCertificates());
+        var mcToken = javaProfile.getMcToken();
+        var accessToken = mcToken != null ? mcToken.getAccessToken() : null;
         return new MinecraftProtocol(MinecraftCodec.CODEC, gameProfile, accessToken);
     }
 
@@ -167,11 +170,6 @@ public class Authenticator {
     @SneakyThrows
     private FullJavaSession msaLogin() {
         return getMsaAuthStep().getFromInput(createHttpClient(), new StepCredentialsMsaCode.MsaCredentials(CONFIG.authentication.email, CONFIG.authentication.password));
-    }
-
-    @SneakyThrows
-    private FullJavaSession localWebserverLogin() {
-        return getLocalWebserverStep().getFromInput(createHttpClient(), new StepLocalWebServer.LocalWebServerCallback(this::onLocalWebServer));
     }
 
     @SneakyThrows
@@ -193,9 +191,9 @@ public class Authenticator {
         return switch (CONFIG.authentication.accountType) {
             case MSA -> getMsaAuthStep();
             case DEVICE_CODE -> getDeviceCodeAuthStep();
-            case LOCAL_WEBSERVER -> getLocalWebserverStep();
             case DEVICE_CODE_WITHOUT_DEVICE_TOKEN -> getDeviceCodeAuthWithoutDeviceTokenStep();
             case PRISM -> getPrismDeviceCodeAuthStep();
+            case OFFLINE -> null;
         };
     }
 
@@ -203,19 +201,18 @@ public class Authenticator {
         return switch (CONFIG.authentication.accountType) {
             case MSA -> msaLogin();
             case DEVICE_CODE -> deviceCodeLogin();
-            case LOCAL_WEBSERVER -> localWebserverLogin();
             case DEVICE_CODE_WITHOUT_DEVICE_TOKEN -> withoutDeviceTokenLogin();
             case PRISM -> prismDeviceCodeLogin();
+            case OFFLINE -> offlineLogin();
         };
     }
 
-    private void onLocalWebServer(final StepLocalWebServer.LocalWebServer server) {
-        AUTH_LOG.info("Login Here: {}", server.getAuthenticationUrl());
-        if (CONFIG.authentication.openBrowserOnLogin) tryOpenBrowser(server.getAuthenticationUrl());
+    private FullJavaSession offlineLogin() {
+        return new FullJavaSession(new StepMCProfile.MCProfile(UUID.randomUUID(), CONFIG.authentication.username, null, null), null);
     }
 
     private void onDeviceCode(final StepMsaDeviceCode.MsaDeviceCode code) {
-        AUTH_LOG.error("Login Here: {}", code.getDirectVerificationUri());
+        AUTH_LOG.error("Login Here: {} with code: {}", code.getDirectVerificationUri(), code.getUserCode());
         EVENT_BUS.postAsync(new MsaDeviceCodeLoginEvent(code));
         if (CONFIG.authentication.openBrowserOnLogin) tryOpenBrowser(code.getDirectVerificationUri());
     }
@@ -270,7 +267,10 @@ public class Authenticator {
     }
 
     private void saveAuthCache(final FullJavaSession session) {
-        final JsonObject json = getAuthStep().toJson(session);
+        saveAuthCacheJson(getAuthStep().toJson(session));
+    }
+
+    private void saveAuthCacheJson(JsonObject json) {
         try {
             final File tempFile = new File(AUTH_CACHE_FILE.getAbsolutePath() + ".tmp");
             if (tempFile.exists()) tempFile.delete();
@@ -298,12 +298,56 @@ public class Authenticator {
 
     private Optional<FullJavaSession> loadAuthCache() {
         if (!AUTH_CACHE_FILE.exists()) return Optional.empty();
+        fixupAuthCacheIfPlayerCertsMissing();
+        return readAuthCacheJson()
+            .map(json -> getAuthStep().fromJson(json));
+    }
+
+    private Optional<JsonObject> readAuthCacheJson() {
         try (Reader reader = new FileReader(AUTH_CACHE_FILE)) {
             final JsonObject json = GSON.fromJson(reader, JsonObject.class);
-            return Optional.of(getAuthStep().fromJson(json));
-        } catch (IOException e) {
+            return Optional.of(json);
+        } catch (final NullPointerException e) {
+            AUTH_LOG.debug("Unable to load auth cache!", e);
+            if (e.getMessage().contains("com.google.gson.JsonObject")) {
+                AUTH_LOG.warn("Auth cache incompatible with current auth type");
+            }
+            return Optional.empty();
+        } catch (Exception e) {
             AUTH_LOG.debug("Unable to load auth cache!", e);
             return Optional.empty();
+        }
+    }
+
+    private void fixupAuthCacheIfPlayerCertsMissing() {
+        var jsonOptional = readAuthCacheJson();
+        if (jsonOptional.isEmpty()) return;
+        var json = jsonOptional.get();
+        try {
+            var playerCertificatesJson = json.getAsJsonObject("playerCertificates");
+            if (playerCertificatesJson != null) return;
+        } catch (Exception e) {
+            AUTH_LOG.warn("Error reading auth cache while fixing up player certs in auth cache", e);
+            return;
+        }
+        AUTH_LOG.info("Found auth cache without player certs, inserting dummy data fixup");
+        try {
+            var certsJson = new JsonObject();
+            certsJson.addProperty("expireTimeMs", 0);
+            var generator = KeyPairGenerator.getInstance("RSA");
+            generator.initialize(2048);
+            var keypair = generator.generateKeyPair();
+            var dummyPubKey = keypair.getPublic().getEncoded();
+            var dummyPrivKey = keypair.getPrivate().getEncoded();
+            certsJson.addProperty("publicKey", Base64.getEncoder().encodeToString(dummyPubKey));
+            certsJson.addProperty("privateKey", Base64.getEncoder().encodeToString(dummyPrivKey));
+            certsJson.addProperty("publicKeySignature", Base64.getEncoder().encodeToString("foo".getBytes()));
+            certsJson.addProperty("legacyPublicKeySignature", Base64.getEncoder().encodeToString("bar".getBytes()));
+            json.add("playerCertificates", certsJson);
+            saveAuthCacheJson(json);
+            AUTH_LOG.info("Auth cache fixup dummy data write completed");
+        } catch (final Exception e) {
+            AUTH_LOG.warn("Error writing auth cache while fixing up player certs in auth cache", e);
         }
     }
 

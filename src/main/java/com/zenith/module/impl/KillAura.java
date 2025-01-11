@@ -10,7 +10,6 @@ import com.zenith.util.math.MathHelper;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.EquipmentSlot;
-import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.EntityMetadata;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.ByteEntityMetadata;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.Hand;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.InteractAction;
@@ -78,7 +77,7 @@ public class KillAura extends AbstractInventoryModule {
     }
 
     @Override
-    public boolean shouldBeEnabled() {
+    public boolean enabledSetting() {
         return CONFIG.client.extra.killAura.enabled;
     }
 
@@ -136,29 +135,30 @@ public class KillAura extends AbstractInventoryModule {
 
         } else if (entity instanceof EntityStandard e) {
             if (CONFIG.client.extra.killAura.targetHostileMobs) {
-                if (hostileEntities.contains(e.getEntityType())) return true;
+                if (hostileEntities.contains(e.getEntityType()))
+                    return !CONFIG.client.extra.killAura.onlyHostileAggressive || isAggressive(entity);
             }
             if (CONFIG.client.extra.killAura.targetArmorStands) {
                 if (e.getEntityType() == EntityType.ARMOR_STAND) return true;
             }
             if (CONFIG.client.extra.killAura.targetNeutralMobs) {
-                if (neutralEntities.contains(e.getEntityType())) {
-                    if (CONFIG.client.extra.killAura.onlyNeutralAggressive) {
-                        // https://wiki.vg/Entity_metadata#Mob
-                        var byteMetadata = entity.getMetadata().get(15);
-                        if (byteMetadata == null) return false;
-                        if (byteMetadata instanceof ByteEntityMetadata byteData) {
-                            var data = byteData.getPrimitiveValue() & 0x04;
-                            return data != 0;
-                        }
-                        return false;
-                    }
-                    return true;
-                }
+                if (neutralEntities.contains(e.getEntityType()))
+                    return !CONFIG.client.extra.killAura.onlyNeutralAggressive || isAggressive(entity);
             }
             if (CONFIG.client.extra.killAura.targetCustom) {
                 return CONFIG.client.extra.killAura.customTargets.contains(e.getEntityType());
             }
+        }
+        return false;
+    }
+
+    private static boolean isAggressive(final Entity entity) {
+        // https://wiki.vg/Entity_metadata#Mob
+        var byteMetadata = entity.getMetadata().get(15);
+        if (byteMetadata == null) return false;
+        if (byteMetadata instanceof ByteEntityMetadata byteData) {
+            var data = byteData.getPrimitiveValue() & 0x04;
+            return data != 0;
         }
         return false;
     }
@@ -183,8 +183,8 @@ public class KillAura extends AbstractInventoryModule {
     private boolean hasRotation(final Entity entity) {
         var rotation = Pathing.shortestRotationTo(entity);
         var sim = MODULE.get(PlayerSimulation.class);
-        boolean yawNear = MathHelper.isNear(MathHelper.wrapYaw(sim.getYaw()), MathHelper.wrapYaw(rotation.getX()), 0.1f);
-        boolean pitchNear = MathHelper.isNear(MathHelper.wrapPitch(sim.getPitch()), MathHelper.wrapPitch(rotation.getY()), 0.1f);
+        boolean yawNear = MathHelper.isYawInRange(sim.getYaw(), rotation.getX(), 0.1f);
+        boolean pitchNear = MathHelper.isPitchInRange(sim.getPitch(), rotation.getY(), 0.1f);
         return yawNear && pitchNear;
     }
 

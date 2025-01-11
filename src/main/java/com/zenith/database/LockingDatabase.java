@@ -1,8 +1,11 @@
 package com.zenith.database;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.zenith.Proxy;
+import com.zenith.event.proxy.RedisRestartEvent;
 import com.zenith.util.Wait;
 import org.jdbi.v3.core.HandleConsumer;
+import org.redisson.RedissonShutdownException;
 import org.redisson.api.RLock;
 
 import javax.annotation.Nullable;
@@ -12,6 +15,7 @@ import java.util.Queue;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static com.github.rfresh2.EventConsumer.of;
 import static com.zenith.Shared.*;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -27,6 +31,8 @@ public abstract class LockingDatabase extends Database {
     private RLock rLock;
     protected ScheduledExecutorService lockExecutorService;
     private ScheduledFuture<?> queryExecutorFuture;
+    private final AtomicBoolean redisRestarted = new AtomicBoolean(false);
+    private final Object eventListener = new Object();
 
     public LockingDatabase(final QueryExecutor queryExecutor, final RedisClient redisClient) {
         super(queryExecutor);
@@ -42,7 +48,7 @@ public abstract class LockingDatabase extends Database {
     public abstract Instant getLastEntryTime();
 
     public int getMaxQueueLength() {
-        return defaultMaxQueueLen;
+        return lockAcquired.get() ? 500 : defaultMaxQueueLen;
     }
 
     /**
@@ -68,10 +74,16 @@ public abstract class LockingDatabase extends Database {
     public void start() {
         if (this.isRunning) return;
         super.start();
+        EVENT_BUS.subscribe(eventListener, of(RedisRestartEvent.class, e -> redisRestarted.set(true)));
         this.lockAcquired.set(false);
         synchronized (this) {
             if (isNull(lockExecutorService)) {
-                lockExecutorService = Executors.newSingleThreadScheduledExecutor();
+                lockExecutorService = Executors.newSingleThreadScheduledExecutor(
+                    new ThreadFactoryBuilder()
+                        .setUncaughtExceptionHandler((t, e) -> DATABASE_LOG.error("Uncaught exception in {} lock thread", getLockKey(), e))
+                        .setNameFormat(getLockKey() + "-lock")
+                        .setDaemon(true)
+                        .build());
             }
         }
         lockExecutorService.scheduleAtFixedRate(this::tryLockProcess, (long) (Math.random() * 10), 10L, TimeUnit.SECONDS);
@@ -81,6 +93,7 @@ public abstract class LockingDatabase extends Database {
     public void stop() {
         super.stop();
         synchronized (this) {
+            EVENT_BUS.unsubscribe(eventListener);
             if (nonNull(lockExecutorService)) {
                 try {
                     lockExecutorService.submit(() -> {
@@ -106,7 +119,7 @@ public abstract class LockingDatabase extends Database {
         Wait.wait(20); // buffer for any lock releasers to finish up remaining writes
         syncQueue();
         if (isNull(queryExecutorFuture) || queryExecutorFuture.isDone()) {
-            queryExecutorFuture = EXECUTOR.scheduleWithFixedDelay(this::processQueue, 0L, 250, TimeUnit.MILLISECONDS);
+            queryExecutorFuture = EXECUTOR.scheduleWithFixedDelay(this::processQueue, 0L, 50, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -162,7 +175,12 @@ public abstract class LockingDatabase extends Database {
 
     public void tryLockProcess() {
         try {
-            if (isNull(rLock) || redisClient.isShutDown()) {
+            if (redisRestarted.getAndSet(false)) {
+                releaseLock();
+                onLockReleased();
+                rLock = null;
+            }
+            if (rLock == null || redisClient.isShutDown()) {
                 try {
                     rLock = redisClient.getLock(getLockKey());
                 } catch (final Exception e) {
@@ -204,6 +222,10 @@ public abstract class LockingDatabase extends Database {
             } catch (final Exception e2) {
                 DATABASE_LOG.error("Error releasing lock in try lock process exception", e2);
             }
+            if (e instanceof RedissonShutdownException) {
+                redisClient.restart();
+            }
+            Wait.wait(30);
         }
     }
 
@@ -212,10 +234,12 @@ public abstract class LockingDatabase extends Database {
     }
 
     protected void insert(final Instant instant, final Runnable liveRunnable, final HandleConsumer query) {
-        final int size = insertQueue.size();
-        if (size > getMaxQueueLength()) {
+        if (insertQueue.size() > getMaxQueueLength()) {
+            if (lockAcquired.get()) {
+                DATABASE_LOG.warn("Insert queue size: {} > {} : Flushing {} entries in DB: {}", insertQueue.size(), getMaxQueueLength(), insertQueue.size() - getMaxQueueLength(), getLockKey());
+            }
             synchronized (insertQueue) {
-                for (int i = 0; i < getMaxQueueLength() / 5; i++) {
+                while (insertQueue.size() > getMaxQueueLength() / 2) {
                     insertQueue.poll();
                 }
             }
@@ -237,7 +261,7 @@ public abstract class LockingDatabase extends Database {
                 DATABASE_LOG.error("{} Database queue process exception", getLockKey(), e);
             }
         }
-        Wait.waitRandomMs(100); // adds some jitter
+        Wait.waitRandomMs(50); // adds some jitter
     }
 
 

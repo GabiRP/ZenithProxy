@@ -31,18 +31,21 @@ def validate_linux_cpu_flags():
         return False
 
 
-def validate_linux_glibc_version():
+def validate_linux_glibc_version(config):
     try:
+        mc_version = config.get_mc_version()
+        old_versions = ["1.12.2", "1.20.1", "1.20.4", "1.20.6", "1.21.0"]
+        if mc_version in old_versions:
+            glibc_minor_version_min = 31
+        else:
+            glibc_minor_version_min = 39
         output = subprocess.check_output(["ldd", "--version"], stderr=subprocess.STDOUT, text=True)
         # ldd (Ubuntu GLIBC 2.35-0ubuntu3.4) 2.35
         # get the version from the last word of the first line
         version = output.splitlines()[0].split(" ")[-1]
         version = version.split(".")
-        if int(version[0]) != 2:
-            print("Unsupported OS for linux release channel. " + "\nglibc version too low: " + ".".join(version))
-            return False
-        if int(version[1]) < 31:
-            print("Unsupported OS for linux release channel. " + "\nglibc version too low: " + ".".join(version))
+        if int(version[0]) != 2 or int(version[1]) < glibc_minor_version_min:
+            print("Unsupported OS for linux release channel.\nglibc version too low: ".join(version).join("\nMin glibc version needed: 2.".join(str(glibc_minor_version_min))))
             return False
         return True
     except Exception as e:
@@ -50,13 +53,13 @@ def validate_linux_glibc_version():
         return False
 
 
-def validate_linux_system():
+def validate_linux_system(config):
     try:
         return (
             get_platform_os() == OperatingSystem.LINUX
             and get_platform_arch() == CpuArch.AMD64
             and validate_linux_cpu_flags()
-            and validate_linux_glibc_version()
+            and validate_linux_glibc_version(config)
         )
     except Exception:
         return False
@@ -81,13 +84,27 @@ def validate_system_with_config(config):
     elif config.release_channel.startswith("java"):
         return validate_java_system(config)
     elif config.release_channel.startswith("linux"):
-        return validate_linux_system()
+        return validate_linux_system(config)
     else:
         return False
 
 
 def is_pyinstaller_bundle():
     return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+
+
+def is_nuitka_bundle():
+    return "__compiled__" in globals()
+
+
+def is_windows_python_bundle():
+    return os.path.exists("python/python.exe")
+
+
+def executable_path():
+    if is_nuitka_bundle():
+        return sys.argv[0]
+    return sys.executable
 
 
 class PlatformError(Exception):

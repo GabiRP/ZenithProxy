@@ -7,24 +7,23 @@ import com.zenith.module.Module;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.*;
-import java.time.chrono.ChronoZonedDateTime;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Stream;
 
 import static com.zenith.Shared.*;
 
 public class ActiveHours extends Module {
+    public static final String ACTIVE_HOURS_DISCONNECT_PREFIX = "[Active Hours] ";
     private @Nullable ScheduledFuture<?> activeHoursTickFuture;
     private Instant lastActiveHoursConnect = Instant.EPOCH;
 
     @Override
-    public void subscribeEvents() {
-
-    }
+    public void subscribeEvents() {}
 
     @Override
-    public boolean shouldBeEnabled() {
+    public boolean enabledSetting() {
         return CONFIG.client.extra.utility.actions.activeHours.enabled;
     }
 
@@ -41,45 +40,58 @@ public class ActiveHours extends Module {
     }
 
     private void handleActiveHoursTick() {
-        var activeHoursConfig = CONFIG.client.extra.utility.actions.activeHours;
-        var proxy = Proxy.getInstance();
-        if (proxy.isOn2b2t() && (proxy.isPrio() && proxy.isConnected())) return;
-        if (proxy.hasActivePlayer() && !activeHoursConfig.forceReconnect) return;
-        if (lastActiveHoursConnect.isAfter(Instant.now().minus(Duration.ofHours(1)))) return;
+        try {
+            var activeHoursConfig = CONFIG.client.extra.utility.actions.activeHours;
+            var proxy = Proxy.getInstance();
+            if (proxy.isOn2b2t() && (proxy.isPrio() && proxy.isConnected())) return;
+            if (proxy.hasActivePlayer() && !activeHoursConfig.forceReconnect) return;
+            if (lastActiveHoursConnect.isAfter(Instant.now().minus(Duration.ofHours(1)))) return;
 
-        var queueLength = proxy.isOn2b2t()
-            ? proxy.isPrio()
+            var queueLength = proxy.isOn2b2t()
+                ? proxy.isPrio()
                 ? Queue.getQueueStatus().prio()
                 : Queue.getQueueStatus().regular()
-            : 0;
-        var queueWaitSeconds = activeHoursConfig.queueEtaCalc ? Queue.getQueueWait(queueLength) : 0;
-        var nowPlusQueueWait = LocalDateTime.now(ZoneId.of(activeHoursConfig.timeZoneId))
-            .plusSeconds(queueWaitSeconds)
-            .atZone(ZoneId.of(activeHoursConfig.timeZoneId))
-            .toInstant();
-        var activeTimes = activeHoursConfig.activeTimes.stream()
-            .flatMap(activeTime -> {
+                : 0;
+            var queueWaitSeconds = activeHoursConfig.queueEtaCalc ? Queue.getQueueWait(queueLength) : 0;
+            var nowPlusQueueWait = LocalDateTime.now(ZoneId.of(activeHoursConfig.timeZoneId))
+                .plusSeconds(queueWaitSeconds)
+                .atZone(ZoneId.of(activeHoursConfig.timeZoneId))
+                .toInstant();
+            Map<Instant, ActiveTime> activeTimesMap = new HashMap<>();
+            for (ActiveTime time : activeHoursConfig.activeTimes) {
                 var activeHourToday = ZonedDateTime.of(
                     LocalDate.now(ZoneId.of(activeHoursConfig.timeZoneId)),
-                    LocalTime.of(activeTime.hour(), activeTime.minute()),
+                    LocalTime.of(time.hour(), time.minute()),
                     ZoneId.of(activeHoursConfig.timeZoneId));
                 var activeHourTomorrow = activeHourToday.plusDays(1L);
-                return Stream.of(activeHourToday, activeHourTomorrow);
-            })
-            .map(ChronoZonedDateTime::toInstant)
-            .toList();
-        // active hour within 10 mins range of now
-        var timeRange = Duration.ofMinutes(5); // x2
-        for (Instant activeTime : activeTimes) {
-            if (nowPlusQueueWait.isAfter(activeTime.minus(timeRange))
-                && nowPlusQueueWait.isBefore(activeTime.plus(timeRange))) {
-                info("Connect triggered for registered time: {}", activeTime);
-                EVENT_BUS.postAsync(new ActiveHoursConnectEvent());
-                this.lastActiveHoursConnect = Instant.now();
-                proxy.disconnect(SYSTEM_DISCONNECT);
-                EXECUTOR.schedule(proxy::connectAndCatchExceptions, 1, TimeUnit.MINUTES);
-                break;
+                activeTimesMap.put(activeHourToday.toInstant(), time);
+                activeTimesMap.put(activeHourTomorrow.toInstant(), time);
             }
+            var timeRange = queueWaitSeconds > 28800 // extend range if queue wait is very long
+                ? Duration.ofMinutes(15) // x2
+                : Duration.ofMinutes(5);
+            for (var activeTimeEntry : activeTimesMap.entrySet()) {
+                Instant activeTimeInstant = activeTimeEntry.getKey();
+                ActiveTime activeTime = activeTimeEntry.getValue();
+                if (nowPlusQueueWait.isAfter(activeTimeInstant.minus(timeRange))
+                    && nowPlusQueueWait.isBefore(activeTimeInstant.plus(timeRange))) {
+                    info("Connect triggered for registered time: {}", activeTime);
+                    EVENT_BUS.postAsync(new ActiveHoursConnectEvent(proxy.isConnected() && proxy.isOn2b2t()));
+                    this.lastActiveHoursConnect = Instant.now();
+                    if (proxy.isConnected()) {
+                        proxy.disconnect(ACTIVE_HOURS_DISCONNECT_PREFIX + "Registered Time: " + activeTime);
+                        if (proxy.isOn2b2t()) {
+                            info("Waiting 1 minute to avoid reconnect queue skip");
+                            MODULE.get(AutoReconnect.class).scheduleAutoReconnect(60);
+                            return;
+                        }
+                    }
+                    proxy.connectAndCatchExceptions();
+                    return;
+                }
+            }
+        } catch (final Exception e) {
+            error("Error in active hours tick", e);
         }
     }
 
@@ -96,5 +108,9 @@ public class ActiveHours extends Module {
         public String toString() {
             return (hour() < 10 ? "0" + hour() : hour()) + ":" + (minute() < 10 ? "0" + minute() : minute());
         }
+    }
+
+    public static boolean isActiveHoursDisconnect(final String message) {
+        return message.startsWith(ACTIVE_HOURS_DISCONNECT_PREFIX);
     }
 }

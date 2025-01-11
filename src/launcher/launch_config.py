@@ -29,7 +29,7 @@ def read_launch_config_file():
 class LaunchConfig:
     auto_update = True
     auto_update_launcher = True
-    release_channel = "java.1.20.4"
+    release_channel = "java.1.21.0"
     version = "0.0.0"
     local_version = "0.0.0"
     repo_owner = "rfresh2"
@@ -88,5 +88,9 @@ class LaunchConfig:
 
     def get_mc_version(self):
         # extract mc version from release channel
-        # e.g. java.1.20.1 -> 1.20.1
-        return self.release_channel.split(".")[1]
+        # e.g. java.1.20.1 -> 1.20.1 or linux.1.20.1 -> 1.20.1
+        if (self.release_channel.find(".") == -1
+                or not self.release_channel.startswith("java")
+                or not self.release_channel.startswith("linux")):
+            return "1.21.0"
+        return self.release_channel[self.release_channel.find(".") + 1 :]

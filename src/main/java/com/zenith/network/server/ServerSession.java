@@ -1,5 +1,6 @@
 package com.zenith.network.server;
 
+import com.viaversion.viaversion.api.protocol.version.ProtocolVersion;
 import com.zenith.Proxy;
 import com.zenith.cache.data.PlayerCache;
 import com.zenith.cache.data.ServerProfileCache;
@@ -12,6 +13,7 @@ import com.zenith.feature.spectator.SpectatorEntityRegistry;
 import com.zenith.feature.spectator.entity.SpectatorEntity;
 import com.zenith.network.registry.ZenithHandlerCodec;
 import com.zenith.util.ComponentSerializer;
+import io.netty.channel.ChannelException;
 import io.netty.channel.EventLoop;
 import io.netty.handler.codec.DecoderException;
 import lombok.Getter;
@@ -50,13 +52,7 @@ import static com.zenith.Shared.*;
 @Getter
 @Setter
 public class ServerSession extends TcpServerSession {
-
-    public static final int DEFAULT_COMPRESSION_THRESHOLD = 256;
-
-    // Always empty post-1.7
-    private static final String SERVER_ID = "";
     private static final KeyPair KEY_PAIR;
-
     static {
         try {
             KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
@@ -71,7 +67,9 @@ public class ServerSession extends TcpServerSession {
     private String username = "";
     // as requested by the player during login. may not be the same as what mojang api returns
     private @Nullable UUID loginProfileUUID;
-    private int protocolVersion; // as reported by the client when they connected
+    private int protocolVersionId; // as reported by the client when they connected
+    private String connectingServerAddress; // as reported by the client when they connected
+    private int connectingServerPort; // as reported by the client when they connected
     protected boolean isTransferring = false;
     protected final CookieCache cookieCache = new CookieCache();
 
@@ -88,8 +86,14 @@ public class ServerSession extends TcpServerSession {
     // we have performed the configuration phase at zenith
     // any subsequent configurations should pass through to client
     protected boolean isConfigured = false;
+    // player has accepted the spawn teleport and position packets
+    // if false, we cancel any outbound teleport and position packets
+    protected boolean spawned = !CONFIG.debug.enforcePlayerSpawnSequence;
+    // player has accepted the spawn teleport and we are awaiting the position packet
+    protected boolean spawning = false;
+    // default spawn teleport id
+    protected final int spawnTeleportId = 1234567890;
     // cancel outbound packets until we have received the protocol switch ack
-    protected boolean awaitingProtocolSwitch = false;
     protected boolean allowSpectatorServerPlayerPosRotate = true;
     // allow spectator to set their camera to client
     // need to persist state to allow them in and out of this
@@ -119,7 +123,7 @@ public class ServerSession extends TcpServerSession {
     }
 
     public String getServerId() {
-        return SERVER_ID;
+        return "";
     }
 
     public ServerSession(final String host, final int port, final MinecraftProtocol protocol, final TcpServer server) {
@@ -136,7 +140,7 @@ public class ServerSession extends TcpServerSession {
     public void callPacketReceived(Packet packet) {
         try {
             Packet p = packet;
-            var state = getPacketProtocol().getState(); // storing this before handlers might mutate it on the session
+            var state = getPacketProtocol().getInboundState(); // storing this before handlers might mutate it on the session
             p = ZenithHandlerCodec.SERVER_REGISTRY.handleInbound(p, this);
             if (p != null && !isSpectator() && (state == ProtocolState.GAME || state == ProtocolState.CONFIGURATION)) {
                 if (state == ProtocolState.CONFIGURATION && !isConfigured()) return;
@@ -149,37 +153,12 @@ public class ServerSession extends TcpServerSession {
 
     @Override
     public Packet callPacketSending(Packet packet) {
-        if (CONFIG.debug.blockProtocolSwitchRaceCondition && blockProtocolSwitchPacketSendingRaceCondition(packet)) return null;
         try {
             return ZenithHandlerCodec.SERVER_REGISTRY.handleOutgoing(packet, this);
         } catch (final Exception e) {
             SERVER_LOG.error("Failed handling packet sending: {}", packet.getClass().getSimpleName(), e);
         }
         return packet;
-    }
-
-    private boolean blockProtocolSwitchPacketSendingRaceCondition(Packet packet) {
-        if (awaitingProtocolSwitch) {
-            /**
-             * Problem: race conditions during GAME -> CONFIGURATION -> GAME from velocity server switches
-             *
-             * MCPL has a single variable for the protocol state
-             * The state is not switched until we receive configuration ACK back from the client
-             * in-between the time the server sends a start configuration until we receive the ack we can still
-             * send GAME packets which will cause the client to disconnect
-             *
-             * Its possible there's race conditions in other protocol switches as well
-             */
-
-            // re-queue packet onto event loop
-            // if the packet does not match the dest protocol state it will be cancelled by the packet error handler eventually
-            sendAsync(packet);
-            // other options:
-            //  blackhole the packet
-            //  introduce a packet queue to preserve order
-            return true;
-        }
-        return false;
     }
 
     @Override
@@ -193,7 +172,7 @@ public class ServerSession extends TcpServerSession {
 
     @Override
     public boolean callPacketError(Throwable throwable) {
-        SERVER_LOG.debug("", throwable);
+        SERVER_LOG.debug("Packet Error", throwable);
         return isLoggedIn;
     }
 
@@ -210,9 +189,9 @@ public class ServerSession extends TcpServerSession {
     @Override
     public void callDisconnected(Component reason, Throwable cause) {
         Proxy.getInstance().getActiveConnections().remove(this);
-        if (!this.isPlayer && cause != null && !(cause instanceof DecoderException || cause instanceof IOException)) {
+        if (!this.isPlayer && cause != null && !(cause instanceof DecoderException || cause instanceof IOException || cause instanceof ChannelException)) {
             // any scanners or TCP connections established result in a lot of these coming in even when they are not actually speaking mc protocol
-            SERVER_LOG.warn(String.format("Connection disconnected: %s", getRemoteAddress()), cause);
+            SERVER_LOG.debug("Connection disconnected: {}", getRemoteAddress(), cause);
             return;
         }
         if (this.isPlayer) {
@@ -236,7 +215,7 @@ public class ServerSession extends TcpServerSession {
                 for (int i = 0; i < connections.length; i++) {
                     var connection = connections[i];
                     connection.send(new ClientboundRemoveEntitiesPacket(new int[]{this.spectatorEntityId}));
-                    connection.send(new ClientboundSystemChatPacket(ComponentSerializer.minedown("&9" + profileCache.getProfile().getName() + " disconnected&r"), false));
+                    connection.send(new ClientboundSystemChatPacket(ComponentSerializer.minimessage("<red>" + Optional.ofNullable(this.profileCache.getProfile()).map(GameProfile::getName).orElse("?") + " disconnected"), false));
                 }
                 EVENT_BUS.postAsync(new ProxySpectatorDisconnectedEvent(profileCache.getProfile()));
             }
@@ -265,12 +244,11 @@ public class ServerSession extends TcpServerSession {
     private @Nullable Packet getDisconnectPacket(@Nullable final Component reason) {
         if (reason == null) return null;
         MinecraftProtocol protocol = getPacketProtocol();
-        if (protocol.getState() == ProtocolState.LOGIN) {
-            return new ClientboundLoginDisconnectPacket(reason);
-        } else if (protocol.getState() == ProtocolState.GAME) {
-            return new ClientboundDisconnectPacket(reason);
-        }
-        return null;
+        return switch (protocol.getOutboundState()) {
+            case LOGIN -> new ClientboundLoginDisconnectPacket(reason);
+            case GAME -> new ClientboundDisconnectPacket(reason);
+            case null, default -> null;
+        };
     }
 
     public void setLoggedIn() {
@@ -279,9 +257,9 @@ public class ServerSession extends TcpServerSession {
             Proxy.getInstance().getActiveConnections().add(this);
     }
 
-    public void sendAsyncAlert(final String minedown) {
-        // todo: gradient colors?
-        this.sendAsync(new ClientboundSystemChatPacket(ComponentSerializer.minedown("&7[&bZenithProxy&7]&r " + minedown), false));
+    public void sendAsyncAlert(final String minimessage) {
+        this.sendAsync(new ClientboundSystemChatPacket(
+            ComponentSerializer.minimessage("<gray>[<aqua>ZenithProxy<gray>] <reset>" + minimessage), false));
     }
 
     public boolean isActivePlayer() {
@@ -377,10 +355,21 @@ public class ServerSession extends TcpServerSession {
         SERVER_LOG.debug("Synced Team members: {} for {}", currentTeamMembers, this.profileCache.getProfile().getName());
     }
 
+    public String getMCVersion() {
+        return ProtocolVersion.getProtocol(protocolVersionId).getName();
+    }
+
+    public ProtocolVersion getProtocolVersion() {
+        return ProtocolVersion.getProtocol(protocolVersionId);
+    }
+
+    public boolean canTransfer() {
+        return getProtocolVersion().newerThanOrEqualTo(ProtocolVersion.v1_20_5);
+    }
+
     public void transfer(final String address, final int port) {
         cookieCache.getStoreSrcPacket(this::sendAsync);
         sendAsync(new ClientboundTransferPacket(address, port));
-        disconnect(Component.text("Transferring to " + address + ":" + port));
     }
 
     public void transferToSpectator(final String address, final int port) {

@@ -8,6 +8,7 @@ import com.zenith.cache.data.entity.EntityCache;
 import com.zenith.cache.data.entity.EntityPlayer;
 import com.zenith.cache.data.inventory.Container;
 import com.zenith.cache.data.inventory.InventoryCache;
+import com.zenith.network.server.ServerSession;
 import com.zenith.util.math.MutableVec3i;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMaps;
 import it.unimi.dsi.fastutil.ints.IntArrayFIFOQueue;
@@ -17,10 +18,12 @@ import lombok.Setter;
 import lombok.experimental.Accessors;
 import net.kyori.adventure.text.Component;
 import org.geysermc.mcprotocollib.network.packet.Packet;
+import org.geysermc.mcprotocollib.network.tcp.TcpSession;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.EntityEvent;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.EquipmentSlot;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.GlobalPos;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.GameMode;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.Hand;
 import org.geysermc.mcprotocollib.protocol.data.game.inventory.ContainerActionType;
 import org.geysermc.mcprotocollib.protocol.data.game.inventory.ContainerType;
 import org.geysermc.mcprotocollib.protocol.data.game.inventory.CreativeGrabAction;
@@ -47,7 +50,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static com.zenith.Shared.CLIENT_LOG;
-import static com.zenith.Shared.CONFIG;
 import static java.util.Objects.nonNull;
 import static org.geysermc.mcprotocollib.protocol.data.game.entity.EquipmentSlot.*;
 
@@ -83,6 +85,7 @@ public class PlayerCache implements CachedData {
     protected boolean isSprinting = false;
     protected EntityEvent opLevel = EntityEvent.PLAYER_OP_PERMISSION_LEVEL_0;
     protected AtomicInteger actionId = new AtomicInteger(0);
+    protected AtomicInteger seqId = new AtomicInteger(0);
     private static final MutableVec3i DEFAULT_SPAWN_POSITION = new MutableVec3i(0, 0, 0);
     protected MutableVec3i spawnPosition = DEFAULT_SPAWN_POSITION;
     protected IntArrayFIFOQueue teleportQueue = new IntArrayFIFOQueue();
@@ -92,7 +95,7 @@ public class PlayerCache implements CachedData {
     }
 
     @Override
-    public void getPackets(@NonNull Consumer<Packet> consumer) {
+    public void getPackets(@NonNull Consumer<Packet> consumer, final @NonNull TcpSession session) {
         // todo: may need to move this out so spectators don't get sent wrong abilities
         consumer.accept(new ClientboundPlayerAbilitiesPacket(this.invincible, this.canFly, this.flying, this.creative, this.flySpeed, this.walkSpeed));
         consumer.accept(new ClientboundChangeDifficultyPacket(this.difficulty, this.isDifficultyLocked));
@@ -110,8 +113,11 @@ public class PlayerCache implements CachedData {
             actionId.get(),
             container.getContents().toArray(new ItemStack[0]),
             null));
-        if (!CONFIG.debug.sendChunksBeforePlayerSpawn)
+        if (session instanceof ServerSession serverSession) {
+            consumer.accept(new ClientboundPlayerPositionPacket(this.getX(), this.getY(), this.getZ(), this.getYaw(), this.getPitch(), serverSession.getSpawnTeleportId()));
+        } else {
             consumer.accept(new ClientboundPlayerPositionPacket(this.getX(), this.getY(), this.getZ(), this.getYaw(), this.getPitch(), ThreadLocalRandom.current().nextInt(16, 1024)));
+        }
         consumer.accept(new ClientboundSetDefaultSpawnPositionPacket(spawnPosition.getX(), spawnPosition.getY(), spawnPosition.getZ(), 0.0f));
         consumer.accept(new ClientboundSetCarriedItemPacket(heldItemSlot));
     }
@@ -128,6 +134,8 @@ public class PlayerCache implements CachedData {
             this.doLimitedCrafting = false;
             this.teleportQueue.clear();
             this.teleportQueue.trim();
+            this.actionId.set(0);
+            this.seqId.set(0);
         }
         if (type == CacheResetType.LOGIN) {
             this.teleportQueue.clear();
@@ -172,6 +180,10 @@ public class PlayerCache implements CachedData {
         }
     }
 
+    public boolean isAlive() {
+        return this.thePlayer.getHealth() > 0;
+    }
+
     public void setInventory(final int containerId, final ItemStack[] inventory) {
         this.inventoryCache.setInventory(containerId, inventory);
     }
@@ -187,6 +199,13 @@ public class PlayerCache implements CachedData {
             case OFF_HAND -> inventory.getItemStack(45);
             case MAIN_HAND -> inventory.getItemStack(heldItemSlot + 36);
             default -> null; // EquipmentSlot.BODY doesn't apply to players, only entities like horses
+        };
+    }
+
+    public ItemStack getEquipment(Hand hand) {
+        return switch (hand) {
+            case Hand.MAIN_HAND -> getEquipment(MAIN_HAND);
+            case Hand.OFF_HAND -> getEquipment(OFF_HAND);
         };
     }
 

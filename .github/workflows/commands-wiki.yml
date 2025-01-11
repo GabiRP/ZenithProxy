@@ -12,23 +12,25 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
-      - name: Gradle Wrapper Verification
-        uses: gradle/wrapper-validation-action@v3
+        with:
+          persist-credentials: false
 
       - name: Setup JDK
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
+          java-version: '23'
           distribution: 'temurin'
 
       - name: Elevate wrapper permissions
         run: chmod +x ./gradlew
 
-      - name: Build ZenithProxy
-        uses: gradle/gradle-build-action@v3
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
-          arguments: build
+          dependency-graph: generate-and-submit
+
+      - name: Build ZenithProxy Java
+        run: ./gradlew jarBuild
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -46,6 +48,7 @@ jobs:
         with:
           repository: ${{ github.repository }}.wiki
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Print Wiki Repo
         run: |

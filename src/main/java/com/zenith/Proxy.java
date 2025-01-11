@@ -2,11 +2,12 @@ package com.zenith;
 
 import ch.qos.logback.classic.LoggerContext;
 import com.zenith.cache.CacheResetType;
+import com.zenith.discord.Embed;
+import com.zenith.discord.NotificationEventListener;
 import com.zenith.event.proxy.*;
 import com.zenith.feature.api.crafthead.CraftheadApi;
 import com.zenith.feature.api.mcsrvstatus.MCSrvStatusApi;
 import com.zenith.feature.api.minotar.MinotarApi;
-import com.zenith.feature.api.prioban.PriobanApi;
 import com.zenith.feature.autoupdater.AutoUpdater;
 import com.zenith.feature.autoupdater.NoOpAutoUpdater;
 import com.zenith.feature.autoupdater.RestAutoUpdater;
@@ -18,9 +19,7 @@ import com.zenith.network.server.CustomServerInfoBuilder;
 import com.zenith.network.server.LanBroadcaster;
 import com.zenith.network.server.ProxyServerListener;
 import com.zenith.network.server.ServerSession;
-import com.zenith.network.server.handler.ProxyServerLoginHandler;
 import com.zenith.util.ComponentSerializer;
-import com.zenith.util.Config;
 import com.zenith.util.FastArrayList;
 import com.zenith.util.Wait;
 import com.zenith.via.ZenithClientChannelInitializer;
@@ -45,7 +44,7 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.Clientbound
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundTabListPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundSoundPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.title.ClientboundSetActionBarTextPacket;
-import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundChatPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundSetCarriedItemPacket;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.LoggerFactory;
@@ -73,13 +72,14 @@ import java.util.stream.Stream;
 
 import static com.github.rfresh2.EventConsumer.of;
 import static com.zenith.Shared.*;
-import static java.util.Objects.isNull;
+import static com.zenith.util.Config.Authentication.AccountType.MSA;
+import static com.zenith.util.Config.Authentication.AccountType.OFFLINE;
 import static java.util.Objects.nonNull;
 
 
 @Getter
 public class Proxy {
-    @Getter protected static Proxy instance;
+    @Getter protected static final Proxy instance = new Proxy();
     protected ClientSession client;
     protected TcpServer server;
     protected final Authenticator authenticator = new Authenticator();
@@ -87,11 +87,12 @@ public class Proxy {
     protected final AtomicReference<ServerSession> currentPlayer = new AtomicReference<>();
     protected final FastArrayList<ServerSession> activeConnections = new FastArrayList<>(ServerSession.class);
     private boolean inQueue = false;
+    private boolean didQueueSkip = false;
     private int queuePosition = 0;
     @Setter @Nullable private Instant connectTime;
     private Instant disconnectTime = Instant.now();
+    private OptionalLong prevOnlineSeconds = OptionalLong.empty();
     private Optional<Boolean> isPrio = Optional.empty();
-    private Optional<Boolean> isPrioBanned = Optional.empty();
     @Getter private final AtomicBoolean loggingIn = new AtomicBoolean(false);
     @Setter @NotNull private AutoUpdater autoUpdater = NoOpAutoUpdater.INSTANCE;
     private LanBroadcaster lanBroadcaster;
@@ -109,7 +110,6 @@ public class Proxy {
             System.setProperty("reactor.schedulers.defaultPoolSize", "1");
         if (System.getProperty("reactor.schedulers.defaultBoundedElasticOnVirtualThreads") == null)
             System.setProperty("reactor.schedulers.defaultBoundedElasticOnVirtualThreads", "true");
-        instance = new Proxy();
         instance.start();
     }
 
@@ -121,17 +121,14 @@ public class Proxy {
             of(StartQueueEvent.class, this::handleStartQueueEvent),
             of(QueuePositionUpdateEvent.class, this::handleQueuePositionUpdateEvent),
             of(QueueCompleteEvent.class, this::handleQueueCompleteEvent),
+            of(QueueSkipEvent.class, this::handleQueueSkipEvent),
             of(PlayerOnlineEvent.class, this::handlePlayerOnlineEvent),
-            of(ServerRestartingEvent.class, this::handleServerRestartingEvent),
             of(PrioStatusEvent.class, this::handlePrioStatusEvent),
-            of(ServerPlayerConnectedEvent.class, this::handleServerPlayerConnectedEvent),
-            of(ServerPlayerDisconnectedEvent.class, this::handleServerPlayerDisconnectedEvent)
+            of(PrivateMessageSendEvent.class, this::handlePrivateMessageSendEvent)
         );
     }
 
     public void start() {
-        loadConfig();
-        loadLaunchConfig();
         DEFAULT_LOG.info("Starting ZenithProxy-{}", LAUNCH_CONFIG.version);
         @Nullable String exeReleaseVersion = getExecutableReleaseVersion();
         if (exeReleaseVersion == null) {
@@ -159,9 +156,11 @@ public class Proxy {
                 } catch (final Throwable e) {
                     err = true;
                     DISCORD_LOG.error("Failed starting discord bot: {}", e.getMessage());
+                    DISCORD_LOG.debug("Failed starting discord bot", e);
                 }
                 if (!err) DISCORD_LOG.info("Started Discord Bot");
             }
+            NotificationEventListener.INSTANCE.subscribeEvents();
             Queue.start();
             saveConfigAsync();
             MinecraftCodecHelper.useBinaryNbtComponentSerializer = CONFIG.debug.binaryNbtComponentSerializer;
@@ -173,7 +172,6 @@ public class Proxy {
             CACHE.reset(CacheResetType.FULL);
             EXECUTOR.scheduleAtFixedRate(this::serverHealthCheck, 1L, 5L, TimeUnit.MINUTES);
             EXECUTOR.scheduleAtFixedRate(this::tablistUpdate, 20L, 3L, TimeUnit.SECONDS);
-            EXECUTOR.scheduleAtFixedRate(this::updatePrioBanStatus, 0L, 1L, TimeUnit.DAYS);
             EXECUTOR.scheduleAtFixedRate(this::twoB2tTimeLimitKickWarningTick, twoB2tTimeLimit.minusMinutes(10L).toMinutes(), 1L, TimeUnit.MINUTES);
             EXECUTOR.scheduleAtFixedRate(this::maxPlaytimeTick, CONFIG.client.maxPlaytimeReconnectMins, 1L, TimeUnit.MINUTES);
             EXECUTOR.schedule(this::serverConnectionTest, 10L, TimeUnit.SECONDS);
@@ -200,12 +198,21 @@ public class Proxy {
                 DEFAULT_LOG.info("Started AutoUpdater");
             }
             DEFAULT_LOG.info("ZenithProxy started!");
-            if (!DISCORD.isRunning() && LAUNCH_CONFIG.release_channel.endsWith(".pre")) {
-                DEFAULT_LOG.warn("You are currently using a ZenithProxy prerelease");
-                DEFAULT_LOG.warn("Prereleases include experiments that may contain bugs and are not always updated with fixes");
-                DEFAULT_LOG.warn("Switch to a stable release with the `channel` command");
+            if (LAUNCH_CONFIG.release_channel.endsWith(".pre")) {
+                DISCORD.sendEmbedMessage(
+                    Embed.builder()
+                        .title("ZenithProxy Prerelease")
+                        .description(
+                            """
+                            You are currently using a ZenithProxy prerelease
+                            
+                            Prereleases include experiments that may contain bugs and are not always updated with fixes             
+                            
+                            Switch to a stable release with the `channel` command
+                            """));
             }
             if (!connected) {
+                DEFAULT_LOG.info("Commands Help: https://github.com/rfresh2/ZenithProxy/wiki/Commands");
                 DEFAULT_LOG.info("Proxy IP: {}", CONFIG.server.getProxyAddress());
                 DEFAULT_LOG.info("Use the `connect` command to log in!");
             }
@@ -240,9 +247,18 @@ public class Proxy {
         this.startServer();
         EXECUTOR.schedule(() -> {
             if (server == null || !server.isListening()) {
-                SERVER_LOG.error("Server is not listening and unable to quick restart, performing full restart...");
-                CONFIG.autoUpdater.shouldReconnectAfterAutoUpdate = true;
-                stop();
+                var errorMessage = """
+                    The ZenithProxy MC server was unable to start correctly.
+                    
+                    Most likely you have two or more ZenithProxy instance running on the same configured port: %s.
+                    
+                    Shut down duplicate instances, or change the configured port: `serverConnection port <port>`
+                    """.formatted(CONFIG.server.bind.port);
+                DISCORD.sendEmbedMessage(
+                    Embed.builder()
+                        .title("ZenithProxy Server Error")
+                        .description(errorMessage)
+                        .errorColor());
             }
         }, 30, TimeUnit.SECONDS);
     }
@@ -264,11 +280,15 @@ public class Proxy {
                 } else {
                     SERVER_LOG.error(
                         """
-                        Unable to connect to configured `proxyIP`: {}
+                        Unable to ping the configured `proxyIP`: {}
                         
-                        This test is most likely failing due to your firewall needing to be disabled.
+                        If you are actually able to connect to ZenithProxy you can disable this test: `connectionTest testOnStart off`
                         
-                        For instructions on how to disable the firewall consult with your VPS provider. Each provider varies in steps.
+                        This test is most likely failing due to a firewall needing to be disabled.
+                        
+                        If the `proxyIP` is incorrect, set `serverConnection proxyIP <ip>` with the correct IP.
+                        
+                        For instructions on how to disable the firewall consult with your VPS provider. Each provider varies in steps and what word they refer to firewalls with.
                         """, address);
                 }
             }, () -> {
@@ -280,7 +300,7 @@ public class Proxy {
     private void maxPlaytimeTick() {
         if (CONFIG.client.maxPlaytimeReconnect && isOnlineForAtLeastDuration(Duration.ofMinutes(CONFIG.client.maxPlaytimeReconnectMins))) {
             CLIENT_LOG.info("Max playtime minutes reached: {}, reconnecting...", CONFIG.client.maxPlaytimeReconnectMins);
-            disconnect(SYSTEM_DISCONNECT);
+            disconnect(MAX_PT_DISCONNECT);
             MODULE.get(AutoReconnect.class).cancelAutoReconnect();
             connect();
         }
@@ -344,11 +364,10 @@ public class Proxy {
     public void kickDisconnect(final String reason, final Throwable cause) {
         if (!isConnected()) return;
         var client = this.client;
+
         try {
-            // out of order timestamp causes server to kick us
-            // must send direct to avoid our mitigation in the outgoing packet handler
-            client.sendDirect(new ServerboundChatPacket("", -1L, 0L, null, 0, BitSet.valueOf(new byte[20])))
-                .get();
+            // must send direct to avoid any caching issues from outbound handlers
+            client.send(new ServerboundSetCarriedItemPacket(10)).get();
         } catch (final Exception e) {
             CLIENT_LOG.error("Error performing kick disconnect", e);
         }
@@ -373,6 +392,7 @@ public class Proxy {
 
     public synchronized void connect(final String address, final int port) {
         if (this.isConnected()) throw new IllegalStateException("Already connected!");
+        if (this.client != null && !this.client.isDisconnected()) throw new IllegalStateException("Not Disconnected!");
         this.connectTime = Instant.now();
         final MinecraftProtocol minecraftProtocol;
         try {
@@ -439,7 +459,6 @@ public class Proxy {
             this.lanBroadcaster = new LanBroadcaster(serverInfoBuilder);
             lanBroadcaster.start();
         }
-        this.server.setGlobalFlag(MinecraftConstants.SERVER_LOGIN_HANDLER_KEY, new ProxyServerLoginHandler());
         this.server.setGlobalFlag(MinecraftConstants.AUTOMATIC_KEEP_ALIVE_MANAGEMENT, true);
         this.server.addListener(new ProxyServerListener());
         this.server.bind(false);
@@ -468,8 +487,9 @@ public class Proxy {
         if (minecraftProtocol == null) throw new RuntimeException("Auth failed");
         var username = minecraftProtocol.getProfile().getName();
         var uuid = minecraftProtocol.getProfile().getId();
+        CACHE.getChatCache().setPlayerCertificates(minecraftProtocol.getProfile().getPlayerCertificates());
         AUTH_LOG.info("Logged in as {} [{}].", username, uuid);
-        if (CONFIG.server.extra.whitelist.autoAddClient)
+        if (CONFIG.server.extra.whitelist.autoAddClient && CONFIG.authentication.accountType != OFFLINE)
             if (PLAYER_LISTS.getWhitelist().add(username, uuid))
                 SERVER_LOG.info("Auto added {} [{}] to whitelist", username, uuid);
         EXECUTOR.execute(this::updateFavicon);
@@ -497,7 +517,7 @@ public class Proxy {
 
     public MinecraftProtocol retrieveLoginTaskResult(Future<MinecraftProtocol> loginTask) {
         try {
-            var maxWait = CONFIG.authentication.accountType == Config.Authentication.AccountType.MSA ? 10 : 300;
+            var maxWait = CONFIG.authentication.accountType == MSA ? 10 : 300;
             for (int currentWait = 0; currentWait < maxWait; currentWait++) {
                 if (loginTask.isDone()) break;
                 if (!loggingIn.get()) {
@@ -521,7 +541,7 @@ public class Proxy {
         try {
             return URI.create(String.format("https://minotar.net/helm/%s/64", playerName)).toURL();
         } catch (MalformedURLException e) {
-            SERVER_LOG.error("Failed to get avatar URL for player: " + playerName, e);
+            SERVER_LOG.error("Failed to get avatar URL for player: {}", playerName, e);
             throw new UncheckedIOException(e);
         }
     }
@@ -559,17 +579,6 @@ public class Proxy {
 
     public boolean isPrio() {
         return this.isPrio.orElse(CONFIG.authentication.prio);
-    }
-
-    public void updatePrioBanStatus() {
-        if (!CONFIG.client.extra.prioBan2b2tCheck || !isOn2b2t()) return;
-        this.isPrioBanned = PriobanApi.INSTANCE.checkPrioBan();
-        if (this.isPrioBanned.isPresent() && !this.isPrioBanned.get().equals(CONFIG.authentication.prioBanned)) {
-            EVENT_BUS.postAsync(new PrioBanStatusUpdateEvent(this.isPrioBanned.get()));
-            CONFIG.authentication.prioBanned = this.isPrioBanned.get();
-            saveConfigAsync();
-            CLIENT_LOG.info("Prio Ban Change Detected: " + this.isPrioBanned.get());
-        }
     }
 
     public void kickNonWhitelistedPlayers() {
@@ -637,10 +646,10 @@ public class Proxy {
                 || !isOnlineOn2b2tForAtLeastDuration(twoB2tTimeLimit.minusMinutes(10L))
             ) return;
             final ServerSession playerConnection = this.currentPlayer.get();
-            final Duration durationUntilKick = twoB2tTimeLimit.minus(Duration.ofSeconds(Proxy.getInstance().getOnlineTimeSeconds()));
+            final Duration durationUntilKick = twoB2tTimeLimit.minus(Duration.ofSeconds(Proxy.getInstance().getOnlineTimeSecondsWithQueueSkip()));
             if (durationUntilKick.isNegative()) return; // sanity check just in case 2b's plugin changes
             var actionBarPacket = new ClientboundSetActionBarTextPacket(
-                ComponentSerializer.minedown((durationUntilKick.toMinutes() <= 3 ? "&c" : "&9") + twoB2tTimeLimit.toHours() + "hr kick in: " + durationUntilKick.toMinutes() + "m"));
+                ComponentSerializer.minimessage((durationUntilKick.toMinutes() <= 3 ? "<red>" : "<blue>") + twoB2tTimeLimit.toHours() + "hr kick in: " + durationUntilKick.toMinutes() + "m"));
             playerConnection.sendAsync(actionBarPacket);
             // each packet will reset text render timer for 3 seconds
             for (int i = 1; i <= 7; i++) { // render the text for about 10 seconds total
@@ -672,45 +681,37 @@ public class Proxy {
             : 0L;
     }
 
+    public long getOnlineTimeSecondsWithQueueSkip() {
+        return !inQueue && didQueueSkip && prevOnlineSeconds.isPresent()
+            ? getOnlineTimeSeconds() + prevOnlineSeconds.getAsLong()
+            : getOnlineTimeSeconds();
+    }
+
     public String getOnlineTimeString() {
-        return Queue.getEtaStringFromSeconds(getOnlineTimeSeconds());
+        return Queue.getEtaStringFromSeconds(getOnlineTimeSecondsWithQueueSkip());
     }
 
     public void handleDisconnectEvent(DisconnectEvent event) {
         CACHE.reset(CacheResetType.FULL);
         this.disconnectTime = Instant.now();
+        this.prevOnlineSeconds = inQueue
+            ? OptionalLong.empty()
+            : OptionalLong.of(Duration.between(this.connectTime, this.disconnectTime).toSeconds());
         this.inQueue = false;
+        this.didQueueSkip = false;
         this.queuePosition = 0;
         TPS.reset();
-        if (!DISCORD.isRunning()
-            && isOn2b2t()
-            && !isPrio()
-            && event.reason().startsWith("You have lost connection")) {
-            if (event.onlineDuration().toSeconds() >= 0L
-                && event.onlineDuration().toSeconds() <= 1L) {
-                CLIENT_LOG.warn("""
-                                You have likely been kicked for reaching the 2b2t non-prio account IP limit.
-                                Consider configuring a connection proxy with the `clientConnection` command.
-                                Or migrate ZenithProxy instances to multiple hosts/IP's.
-                                """);
-            } else if (event.wasInQueue() && event.queuePosition() <= 1) {
-                CLIENT_LOG.warn("""
-                                You have likely been kicked due to being IP banned by 2b2t.
-                                                              
-                                To check, try connecting and waiting through queue with the same account from a different IP.
-                                """);
-            }
-        }
     }
 
     public void handleConnectEvent(ConnectEvent event) {
         this.connectTime = Instant.now();
+        if (isOn2b2t()) EXECUTOR.execute(Queue::updateQueueStatusNow);
     }
 
     public void handleStartQueueEvent(StartQueueEvent event) {
         this.inQueue = true;
         this.queuePosition = 0;
-        updatePrioBanStatus();
+        if (event.wasOnline()) this.connectTime = Instant.now();
     }
 
     public void handleQueuePositionUpdateEvent(QueuePositionUpdateEvent event) {
@@ -722,30 +723,25 @@ public class Proxy {
         this.connectTime = Instant.now();
     }
 
+    public void handleQueueSkipEvent(QueueSkipEvent event) {
+        this.didQueueSkip = true;
+    }
+
     public void handlePlayerOnlineEvent(PlayerOnlineEvent event) {
         if (this.isPrio.isEmpty())
             // assume we are prio if we skipped queuing
             EVENT_BUS.postAsync(new PrioStatusEvent(true));
     }
 
-    public void handleServerRestartingEvent(ServerRestartingEvent event) {
-        if (!this.isPrio() && isNull(getCurrentPlayer().get())) {
-            EXECUTOR.schedule(() -> {
-                if (isNull(getCurrentPlayer().get()))
-                    disconnect(SERVER_RESTARTING);
-            }, ((int) (Math.random() * 20)), TimeUnit.SECONDS);
-        }
-    }
-
     public void handlePrioStatusEvent(PrioStatusEvent event) {
         if (!isOn2b2t()) return;
         if (event.prio() == CONFIG.authentication.prio) {
             if (isPrio.isEmpty()) {
-                CLIENT_LOG.info("Prio Detected: " + event.prio());
+                CLIENT_LOG.info("Prio Detected: {}", event.prio());
                 this.isPrio = Optional.of(event.prio());
             }
         } else {
-            CLIENT_LOG.info("Prio Change Detected: " + event.prio());
+            CLIENT_LOG.info("Prio Change Detected: {}", event.prio());
             EVENT_BUS.postAsync(new PrioStatusUpdateEvent(event.prio()));
             this.isPrio = Optional.of(event.prio());
             CONFIG.authentication.prio = event.prio();
@@ -753,17 +749,13 @@ public class Proxy {
         }
     }
 
-    public void handleServerPlayerConnectedEvent(ServerPlayerConnectedEvent event) {
-        if (!CONFIG.client.extra.chat.showConnectionMessages) return;
-        var serverConnection = getCurrentPlayer().get();
-        if (nonNull(serverConnection) && serverConnection.isLoggedIn())
-            serverConnection.send(new ClientboundSystemChatPacket(ComponentSerializer.minedown("&b" + event.playerEntry().getName() + "&r&e connected"), false));
-    }
-
-    public void handleServerPlayerDisconnectedEvent(ServerPlayerDisconnectedEvent event) {
-        if (!CONFIG.client.extra.chat.showConnectionMessages) return;
-        var serverConnection = getCurrentPlayer().get();
-        if (nonNull(serverConnection) && serverConnection.isLoggedIn())
-            serverConnection.send(new ClientboundSystemChatPacket(ComponentSerializer.minedown("&b" + event.playerEntry().getName() + "&r&e disconnected"), false));
+    public void handlePrivateMessageSendEvent(PrivateMessageSendEvent event) {
+        if (!isConnected()) return;
+        CHAT_LOG.info("{}", ComponentSerializer.serializeJson(event.getContents()));
+        var connections = getActiveConnections().getArray();
+        for (int i = 0; i < connections.length; i++) {
+            var connection = connections[i];
+            connection.sendAsync(new ClientboundSystemChatPacket(event.getContents(), false));
+        }
     }
 }

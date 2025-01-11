@@ -9,18 +9,16 @@ import com.zenith.event.proxy.NewPlayerInVisualRangeEvent;
 import com.zenith.event.proxy.PlayerLeftVisualRangeEvent;
 import com.zenith.event.proxy.PlayerLogoutInVisualRangeEvent;
 import com.zenith.module.Module;
-import com.zenith.util.Config.Client.Extra.ReplayMod.AutoRecordMode;
-import org.jetbrains.annotations.Nullable;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundChatCommandPacket;
 
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.time.Instant;
 
 import static com.github.rfresh2.EventConsumer.of;
 import static com.zenith.Shared.*;
 
 public class VisualRange extends Module {
 
-    private @Nullable ScheduledFuture<?> visualRangeLeaveRecordingStopFuture;
+    private Instant lastWhisper = Instant.EPOCH;
 
     @Override
     public void subscribeEvents() {
@@ -28,12 +26,13 @@ public class VisualRange extends Module {
             this,
             of(NewPlayerInVisualRangeEvent.class, this::handleNewPlayerInVisualRangeEvent),
             of(PlayerLeftVisualRangeEvent.class, this::handlePlayerLeftVisualRangeEvent),
-            of(PlayerLogoutInVisualRangeEvent.class, this::handlePlayerLogoutInVisualRangeEvent)
+            of(PlayerLogoutInVisualRangeEvent.class, this::handlePlayerLogoutInVisualRangeEvent),
+            of(VisualRangeEnterEvent.class, this::enterWhisperHandler)
         );
     }
 
     @Override
-    public boolean shouldBeEnabled() {
+    public boolean enabledSetting() {
         return CONFIG.client.extra.visualRange.enabled;
     }
 
@@ -57,15 +56,33 @@ public class VisualRange extends Module {
         }
     }
 
+    public void enterWhisperHandler(VisualRangeEnterEvent event) {
+        if (!CONFIG.client.extra.visualRange.enterWhisper) return;
+        if (CONFIG.client.extra.visualRange.enterWhisperWhilePlayerConnected && Proxy.getInstance().hasActivePlayer()) return;
+        if (Instant.now().minusSeconds(CONFIG.client.extra.visualRange.enterWhisperCooldownSeconds).isBefore(lastWhisper)) return;
+        lastWhisper = Instant.now();
+        sendClientPacketAsync(new ServerboundChatCommandPacket("w " + event.playerEntry().getName() + " " + CONFIG.client.extra.visualRange.enterWhisperMessage));
+    }
+
     public void handlePlayerLeftVisualRangeEvent(final PlayerLeftVisualRangeEvent event) {
         var isFriend = PLAYER_LISTS.getFriendsList().contains(event.playerEntity().getUuid());
         if (CONFIG.client.extra.visualRange.replayRecording) {
             switch (CONFIG.client.extra.visualRange.replayRecordingMode) {
                 case ALL -> {
-                    if (!anyPlayerInVisualRange()) scheduleRecordingStop();
+                    if (noPlayerInVisualRange()) {
+                        MODULE.get(ReplayMod.class).startDelayedRecordingStop(
+                            CONFIG.client.extra.visualRange.replayRecordingCooldownMins,
+                            this::noPlayerInVisualRange
+                        );
+                    }
                 }
                 case ENEMY -> {
-                    if (!isFriend && !anyEnemyInVisualRange()) scheduleRecordingStop();
+                    if (!isFriend && noEnemyInVisualRange()) {
+                        MODULE.get(ReplayMod.class).startDelayedRecordingStop(
+                            CONFIG.client.extra.visualRange.replayRecordingCooldownMins,
+                            this::noEnemyInVisualRange
+                        );
+                    }
                 }
             }
         }
@@ -80,50 +97,24 @@ public class VisualRange extends Module {
         }
     }
 
-    private void scheduleRecordingStop() {
-        cancelVisualRangeLeaveRecordingStopFuture();
-        visualRangeLeaveRecordingStopFuture = EXECUTOR.schedule(
-            this::disableReplayRecordingConditional,
-            CONFIG.client.extra.visualRange.replayRecordingCooldownMins,
-            TimeUnit.MINUTES
-        );
-    }
-
     private void startReplayRecording() {
         if (!MODULE.get(ReplayMod.class).isEnabled()) {
             info("Starting replay recording");
             MODULE.get(ReplayMod.class).enable();
         }
-        cancelVisualRangeLeaveRecordingStopFuture();
     }
 
-    private void cancelVisualRangeLeaveRecordingStopFuture() {
-        if (visualRangeLeaveRecordingStopFuture != null && !visualRangeLeaveRecordingStopFuture.isDone()) {
-            visualRangeLeaveRecordingStopFuture.cancel(false);
-        }
-    }
-
-    private void disableReplayRecordingConditional() {
-        if (!MODULE.get(ReplayMod.class).isEnabled()) return;
-        if (anyEnemyInVisualRange()) return;
-        if (CONFIG.client.extra.replayMod.autoRecordMode == AutoRecordMode.PROXY_CONNECTED) return;
-        if (CONFIG.client.extra.replayMod.autoRecordMode == AutoRecordMode.PLAYER_CONNECTED)
-            if (Proxy.getInstance().hasActivePlayer()) return;
-        info("Stopping replay recording");
-        MODULE.get(ReplayMod.class).disable();
-    }
-
-    private boolean anyEnemyInVisualRange() {
+    private boolean noEnemyInVisualRange() {
         return CACHE.getEntityCache().getEntities().values().stream()
             .filter(entity -> entity instanceof EntityPlayer)
             .filter(entity -> !entity.equals(CACHE.getPlayerCache().getThePlayer()))
-            .anyMatch(entityPlayer -> !PLAYER_LISTS.getFriendsList().contains(entityPlayer.getUuid()));
+            .allMatch(entityPlayer -> PLAYER_LISTS.getFriendsList().contains(entityPlayer.getUuid()));
     }
 
-    private boolean anyPlayerInVisualRange() {
+    private boolean noPlayerInVisualRange() {
         return CACHE.getEntityCache().getEntities().values().stream()
             .filter(entity -> entity instanceof EntityPlayer)
-            .anyMatch(entity -> !entity.equals(CACHE.getPlayerCache().getThePlayer()));
+            .allMatch(entity -> entity.equals(CACHE.getPlayerCache().getThePlayer()));
     }
 
     public void handlePlayerLogoutInVisualRangeEvent(final PlayerLogoutInVisualRangeEvent event) {

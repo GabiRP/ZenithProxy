@@ -26,10 +26,18 @@ public class UpdateCommand extends Command {
     public LiteralArgumentBuilder<CommandContext> register() {
         return command("update").requires(Command::validateAccountOwner).executes(c -> {
             try {
+                if (!LAUNCH_CONFIG.auto_update) {
+                    DEFAULT_LOG.error("Auto update is disabled. No update will be applied");
+                }
                 EVENT_BUS.post(new UpdateStartEvent(Proxy.getInstance().getAutoUpdater().getNewVersion()));
                 CONFIG.discord.isUpdating = true;
                 if (Proxy.getInstance().isConnected()) {
                     CONFIG.autoUpdater.shouldReconnectAfterAutoUpdate = true;
+                }
+                if (LAUNCH_CONFIG.auto_update && LAUNCH_CONFIG.release_channel.endsWith(".pre")) {
+                    // force update when using pre-releases
+                    LAUNCH_CONFIG.version = "0.0.0+" + LAUNCH_CONFIG.release_channel;
+                    saveLaunchConfig();
                 }
                 Proxy.getInstance().stop();
             } catch (final Exception e) {
@@ -44,6 +52,11 @@ public class UpdateCommand extends Command {
         }).then(literal("c").executes(c -> {
             CONFIG.discord.isUpdating = true;
             CONFIG.autoUpdater.shouldReconnectAfterAutoUpdate = true;
+            if (LAUNCH_CONFIG.auto_update && LAUNCH_CONFIG.release_channel.endsWith(".pre")) {
+                // force update when using pre-releases
+                LAUNCH_CONFIG.version = "0.0.0+" + LAUNCH_CONFIG.release_channel;
+                saveLaunchConfig();
+            }
             EVENT_BUS.post(new UpdateStartEvent(Proxy.getInstance().getAutoUpdater().getNewVersion()));
             Proxy.getInstance().stop();
         }));

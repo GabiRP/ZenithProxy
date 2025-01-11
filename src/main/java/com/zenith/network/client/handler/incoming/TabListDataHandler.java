@@ -13,7 +13,6 @@ import lombok.NonNull;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundTabListPacket;
 
 import java.time.Duration;
-import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -55,14 +54,16 @@ public class TabListDataHandler implements ClientEventLoopPacketHandler<Clientbo
                 .findAny();
         if (queueHeader.isPresent()) {
             if (!session.isInQueue()) {
+                boolean wasOnline = false;
+                Duration wasOnlineDuration = Duration.ZERO;
                 if (session.isOnline()) {
                     // can occur if we get kicked to queue in certain cases like if the main server restarts
                     // resetting connect time to calculate queue duration correctly
-                    CLIENT_LOG.info("Detected that the client was kicked to queue. Was online for {}",
-                                    formatDuration(Duration.ofSeconds(Proxy.getInstance().getOnlineTimeSeconds())));
-                    Proxy.getInstance().setConnectTime(Instant.now());
+                    wasOnline = true;
+                    wasOnlineDuration = Duration.ofSeconds(Proxy.getInstance().getOnlineTimeSeconds());
+                    CLIENT_LOG.info("Detected that the client was kicked to queue. Was online for {}", formatDuration(wasOnlineDuration));
                 }
-                EVENT_BUS.postAsync(new StartQueueEvent());
+                EVENT_BUS.postAsync(new StartQueueEvent(wasOnline, wasOnlineDuration));
                 queueDuration = Optional.empty();
             }
             session.setInQueue(true);
@@ -94,11 +95,16 @@ public class TabListDataHandler implements ClientEventLoopPacketHandler<Clientbo
                      * prio:
                      * "This account has priority status and will be placed in a shorter queue."
                      */
-                    EVENT_BUS.postAsync(new PrioStatusEvent(!messageString.contains("shop.2b2t.org")));
+                    if (messageString.contains("purchase priority queue")) {
+                        EVENT_BUS.postAsync(new PrioStatusEvent(false));
+                    } else if (messageString.contains("has priority status")) {
+                        EVENT_BUS.postAsync(new PrioStatusEvent(true));
+                    }
                 });
     }
 
     private synchronized void parse2bPing(final ClientboundTabListPacket packet, ClientSession session) {
+        if (CONFIG.client.ping.mode != Config.Client.Ping.Mode.TABLIST) return;
         Optional.of(packet.getFooter())
                 .map(ComponentSerializer::serializePlain)
                 .map(textRaw -> textRaw.replace("\n", ""))
@@ -111,12 +117,8 @@ public class TabListDataHandler implements ClientEventLoopPacketHandler<Clientbo
                         final String pingSection = hyphenSplit.getLast();
                         final List<String> pingSectionSpaceSplit = Arrays.asList(pingSection.split(" "));
                         if (!pingSectionSpaceSplit.isEmpty()) {
-                            final String ping = pingSectionSpaceSplit.get(1);
                             try {
-                                int pingInt = Integer.parseInt(ping);
-                                if (CONFIG.client.ping.mode == Config.Client.Ping.Mode.TABLIST) {
-                                    session.setPing(pingInt);
-                                }
+                                session.setPing(Integer.parseInt(pingSectionSpaceSplit.get(1)));
                             } catch (final Exception e) {
                                 // f
                             }

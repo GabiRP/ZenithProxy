@@ -30,12 +30,17 @@ public class AutoMend extends AbstractInventoryModule {
             return;
         }
         if (CACHE.getPlayerCache().getThePlayer().isAlive()) {
+            if (MODULE.get(AutoTotem.class).isEnabled()
+                && MODULE.get(AutoTotem.class).playerHealthBelowThreshold()) {
+                delay = 50;
+                return;
+            }
             delay = doInventoryActions();
         }
     }
 
     @Override
-    public boolean shouldBeEnabled() {
+    public boolean enabledSetting() {
         return CONFIG.client.extra.autoMend.enabled;
     }
 

@@ -12,7 +12,20 @@ public class MutableVec3d {
     private double y;
     private double z;
 
-    public static MutableVec3d ZERO = new MutableVec3d(0, 0, 0);
+    // pls be nice and don't mutate this :)
+    public static final MutableVec3d ZERO = new MutableVec3d(0, 0, 0);
+
+    public MutableVec3d(final MutableVec3d velocity) {
+        this.x = velocity.x;
+        this.y = velocity.y;
+        this.z = velocity.z;
+    }
+
+    public void set(double x, double y, double z) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+    }
 
     public void multiply(double value) {
         this.x *= value;
@@ -42,6 +55,10 @@ public class MutableVec3d {
         return this.x * this.x + this.y * this.y + this.z * this.z;
     }
 
+    public double length() {
+        return Math.sqrt(this.lengthSquared());
+    }
+
     public void normalize() {
         double d = Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z);
         if (d < 1.0E-4) {
@@ -57,6 +74,10 @@ public class MutableVec3d {
 
     public double horizontalLengthSquared() {
         return this.x * this.x + this.z * this.z;
+    }
+
+    public double horizontalDistance() {
+        return Math.sqrt(this.horizontalLengthSquared());
     }
 
     public double distance2d(double x, double z) {

@@ -1,5 +1,6 @@
 package com.zenith.database;
 
+import com.zenith.event.proxy.RedisRestartEvent;
 import io.netty.resolver.DefaultAddressResolverGroup;
 import lombok.Getter;
 import org.redisson.Redisson;
@@ -7,8 +8,9 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.redisson.config.Config;
 
-import static com.zenith.Shared.CONFIG;
-import static com.zenith.Shared.DATABASE_LOG;
+import java.time.Instant;
+
+import static com.zenith.Shared.*;
 import static java.util.Objects.isNull;
 
 @Getter
@@ -42,6 +44,28 @@ public class RedisClient {
 
     public boolean isShutDown() {
         return isNull(redissonClient) || redissonClient.isShuttingDown() || redissonClient.isShutdown();
+    }
+
+    private Instant lastRestart = Instant.EPOCH;
+
+    public void restart() {
+        synchronized (this) {
+            if (Instant.now().isBefore(lastRestart.plusSeconds(300))) {
+                // hacky prevention of multiple locking db instances all hitting this
+                DATABASE_LOG.info("Ignoring redis restart request, last restart was less than 30 seconds ago");
+                return;
+            }
+            lastRestart = Instant.now();
+            if (redissonClient != null) {
+                try {
+                    redissonClient.shutdown();
+                } catch (final Throwable e) {
+                    DATABASE_LOG.warn("Failed to shutdown redisson client", e);
+                }
+            }
+            redissonClient = buildRedisClient();
+            EVENT_BUS.postAsync(RedisRestartEvent.INSTANCE);
+        }
     }
 
     public static RedissonClient buildRedisClient() {

@@ -19,6 +19,7 @@ import lombok.NonNull;
 import lombok.Setter;
 import net.kyori.adventure.key.Key;
 import org.geysermc.mcprotocollib.network.packet.Packet;
+import org.geysermc.mcprotocollib.network.tcp.TcpSession;
 import org.geysermc.mcprotocollib.protocol.codec.MinecraftCodec;
 import org.geysermc.mcprotocollib.protocol.codec.MinecraftCodecHelper;
 import org.geysermc.mcprotocollib.protocol.data.game.RegistryEntry;
@@ -26,6 +27,7 @@ import org.geysermc.mcprotocollib.protocol.data.game.chunk.ChunkBiomeData;
 import org.geysermc.mcprotocollib.protocol.data.game.chunk.ChunkSection;
 import org.geysermc.mcprotocollib.protocol.data.game.chunk.DataPalette;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerSpawnInfo;
+import org.geysermc.mcprotocollib.protocol.data.game.level.LightUpdateData;
 import org.geysermc.mcprotocollib.protocol.data.game.level.block.BlockChangeEntry;
 import org.geysermc.mcprotocollib.protocol.data.game.level.block.BlockEntityInfo;
 import org.geysermc.mcprotocollib.protocol.data.game.level.block.BlockEntityType;
@@ -34,16 +36,11 @@ import org.geysermc.mcprotocollib.protocol.data.game.level.notify.RainStrengthVa
 import org.geysermc.mcprotocollib.protocol.data.game.level.notify.ThunderStrengthValue;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundCustomPayloadPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundRespawnPacket;
-import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerPositionPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.*;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.border.ClientboundInitializeBorderPacket;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -64,9 +61,9 @@ public class ChunkCache implements CachedData {
     // iterators over this map are not thread safe.
     // to do iteration, copy the key or value set into a new list, then iterate over that copied list.
     // trade-off: faster and lower memory lookups (compared to ConcurrentHashMap), but slower and more memory intensive iteration
-    protected final Long2ObjectOpenHashMap<Chunk> cache = new Long2ObjectOpenHashMap<>();
+    protected final Long2ObjectOpenHashMap<Chunk> cache = new Long2ObjectOpenHashMap<>(81, 0.5f);
     protected @Nullable DimensionData currentDimension = null;
-    protected Int2ObjectOpenHashMap<DimensionData> dimensionRegistry = new Int2ObjectOpenHashMap<>();
+    protected Int2ObjectOpenHashMap<DimensionData> dimensionRegistry = new Int2ObjectOpenHashMap<>(4);
     protected List<Key> worldNames = new ArrayList<>();
     protected int serverViewDistance = -1;
     protected int serverSimulationDistance = -1;
@@ -157,6 +154,7 @@ public class ChunkCache implements CachedData {
                 chunk.lightUpdateData)
             )
             .forEach(currentPlayer::sendAsync);
+        CACHE_LOG.info("Syncing {} chunks to current player", chunks.size());
         currentPlayer.sendAsync(new ClientboundChunkBatchFinishedPacket(chunks.size()));
     }
 
@@ -197,7 +195,7 @@ public class ChunkCache implements CachedData {
     // update any block entities implicitly affected by this block update
     // server doesn't send us tile entity update packets and relies on logic in client
     private void handleBlockUpdateBlockEntity(BlockChangeEntry record, int relativeX, int y, int relativeZ, Chunk chunk) {
-        if (record.getBlock() == BlockRegistry.AIR.id()) {
+        if (BLOCK_DATA.isAir(BlockRegistry.REGISTRY.get(record.getBlock()))) {
             chunk.blockEntities.removeIf(tileEntity -> tileEntity.getX() == relativeX && tileEntity.getY() == y && tileEntity.getZ() == relativeZ);
         } else {
             final var block = BLOCK_DATA.getBlockDataFromBlockStateId(record.getBlock());
@@ -319,8 +317,36 @@ public class ChunkCache implements CachedData {
             : BrandSerializer.appendBrand(codec, serverBrand);
     }
 
+    private static final byte[] fullBrightSkyLightData;
+    static {
+        fullBrightSkyLightData = new byte[2048];
+        for (int j = 0; j < 2048; j++) {
+            fullBrightSkyLightData[j] = (byte) 0b11111111;
+        }
+    }
+
+    private LightUpdateData createFullBrightLightData(LightUpdateData lightData, int sectionCount) {
+        var sectionPlusAboveBelowCount = sectionCount + 2;
+        var skylightMaskSet = new BitSet(sectionPlusAboveBelowCount);
+        skylightMaskSet.set(0, sectionPlusAboveBelowCount);
+        // leave all empty
+        var emptySkyLightMask = new BitSet(sectionPlusAboveBelowCount);
+        List<byte[]> skyUpdates = new ArrayList<>(sectionPlusAboveBelowCount);
+        for (int i = 0; i < sectionPlusAboveBelowCount; i++) {
+            skyUpdates.add(fullBrightSkyLightData);
+        }
+        return new LightUpdateData(
+            skylightMaskSet.toLongArray(),
+            lightData.getBlockYMask(),
+            emptySkyLightMask.toLongArray(),
+            lightData.getEmptyBlockYMask(),
+            skyUpdates,
+            lightData.getBlockUpdates()
+        );
+    }
+
     @Override
-    public void getPackets(@NonNull Consumer<Packet> consumer) {
+    public void getPackets(@NonNull Consumer<Packet> consumer, final @NonNull TcpSession session) {
         try {
             final var brandBytes = getServerBrand();
             consumer.accept(new ClientboundCustomPayloadPacket(Key.key("minecraft", "brand"), brandBytes));
@@ -352,16 +378,11 @@ public class ChunkCache implements CachedData {
                     chunk.sections,
                     chunk.heightMaps,
                     chunk.blockEntities.toArray(new BlockEntityInfo[0]),
-                    chunk.lightUpdateData));
+                    CONFIG.debug.server.cache.fullbrightChunkSkylight
+                        ? createFullBrightLightData(chunk.lightUpdateData, chunk.sections.length)
+                        : chunk.lightUpdateData));
             }
             consumer.accept(new ClientboundChunkBatchFinishedPacket(this.cache.size()));
-            if (CONFIG.debug.sendChunksBeforePlayerSpawn) {
-                // todo: this will not handle spectator player cache pos correctly, but we don't have
-                //  enough context here to know if this is the spectator or not
-                //  at worst, the spectator pos is 1 block off from where we should spawn them anyway
-                var player = CACHE.getPlayerCache();
-                consumer.accept(new ClientboundPlayerPositionPacket(player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), ThreadLocalRandom.current().nextInt(16, 1024)));
-            }
         } catch (Exception e) {
             CLIENT_LOG.error("Error getting ChunkData packets from cache", e);
         }

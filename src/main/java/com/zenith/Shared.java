@@ -25,7 +25,9 @@ import com.zenith.module.ModuleManager;
 import com.zenith.network.server.handler.player.InGameCommandManager;
 import com.zenith.terminal.TerminalManager;
 import com.zenith.util.Config;
+import com.zenith.util.ConfigVerifier;
 import com.zenith.util.LaunchConfig;
+import com.zenith.util.Wait;
 import com.zenith.via.ZenithViaInitializer;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -56,12 +58,13 @@ public class Shared {
     public static final File CONFIG_FILE = new File("config.json");
     public static final File LAUNCH_CONFIG_FILE = new File("launch_config.json");
     public static final String SERVER_RESTARTING = "Server restarting";
-    public static final String SYSTEM_DISCONNECT = "System disconnect";
+    public static final String MAX_PT_DISCONNECT = "Max Playtime Disconnect";
+    public static final String SYSTEM_DISCONNECT = "System Disconnect";
     public static final String MANUAL_DISCONNECT = "Manual Disconnect";
-    public static final String AUTO_DISCONNECT = "AutoDisconnect";
     public static final String LOGIN_FAILED = "Login Failed";
-    public static Config CONFIG;
-    public static LaunchConfig LAUNCH_CONFIG;
+    public static final String AUTH_REQUIRED = "Cannot join online mode server with offline auth";
+    public static final Config CONFIG;
+    public static final LaunchConfig LAUNCH_CONFIG;
     public static final DataCache CACHE;
     public static final DiscordBot DISCORD;
     public static final SimpleEventBus EVENT_BUS;
@@ -80,7 +83,7 @@ public class Shared {
     public static final CommandManager COMMAND;
     public static final PlayerInventoryManager INVENTORY;
     public static final ZenithViaInitializer VIA_INITIALIZER;
-    public static synchronized void loadConfig() {
+    public static synchronized Config loadConfig() {
         try {
             DEFAULT_LOG.info("Loading config...");
 
@@ -95,16 +98,19 @@ public class Shared {
                 config = new Config();
             }
 
-            CONFIG = config.doPostLoad();
-            PLAYER_LISTS.init();
             DEFAULT_LOG.info("Config loaded.");
+            return config;
         } catch (final Throwable e) {
             DEFAULT_LOG.error("Unable to load config!", e);
+            DEFAULT_LOG.error("config.json must be manually fixed or deleted");
+            DEFAULT_LOG.error("Shutting down in 10s");
+            Wait.wait(10);
             System.exit(1);
+            return null;
         }
     }
 
-    public static synchronized void loadLaunchConfig() {
+    public static synchronized LaunchConfig loadLaunchConfig() {
         try {
             DEFAULT_LOG.info("Loading launch config...");
 
@@ -114,18 +120,20 @@ public class Shared {
                     config = GSON.fromJson(reader, LaunchConfig.class);
                 } catch (IOException e) {
                     DEFAULT_LOG.error("Unable to load launch config. Writing default config", e);
-                    saveLaunchConfig();
+                    config = new LaunchConfig();
                 }
             } else {
-                saveLaunchConfig();
+                config = new LaunchConfig();
             }
-            if (config == null) {
-                if (LAUNCH_CONFIG == null) LAUNCH_CONFIG = new LaunchConfig();
-            } else LAUNCH_CONFIG = config;
             DEFAULT_LOG.info("Launch config loaded.");
+            return config;
         } catch (final Throwable e) {
             DEFAULT_LOG.error("Unable to load launch config!", e);
+            DEFAULT_LOG.error("launch_config.json must be manually fixed or deleted");
+            DEFAULT_LOG.error("Shutting down in 10s");
+            Wait.wait(10);
             System.exit(1);
+            return null;
         }
     }
 
@@ -155,8 +163,8 @@ public class Shared {
         DEFAULT_LOG.debug("Saving config...");
 
         if (CONFIG == null) {
-            DEFAULT_LOG.warn("Config is not set, saving default config!");
-            CONFIG = new Config().doPostLoad();
+            DEFAULT_LOG.error("Cannot save unloaded config");
+            return;
         }
 
         try {
@@ -176,8 +184,8 @@ public class Shared {
         DEFAULT_LOG.debug("Saving launch config...");
 
         if (LAUNCH_CONFIG == null) {
-            DEFAULT_LOG.warn("Launch config is not set, saving default config!");
-            LAUNCH_CONFIG = new LaunchConfig();
+            DEFAULT_LOG.error("Cannot save unloaded launch config");
+            return;
         }
 
         try {
@@ -201,11 +209,13 @@ public class Shared {
             EXECUTOR = Executors.newScheduledThreadPool(4, new ThreadFactoryBuilder()
                 .setNameFormat("ZenithProxy Scheduled Executor - #%d")
                 .setDaemon(true)
+                .setUncaughtExceptionHandler((thread, e) -> DEFAULT_LOG.error("Uncaught exception in scheduled executor thread {}", thread, e))
                 .build());
             DISCORD = new DiscordBot();
             EVENT_BUS = new SimpleEventBus(Executors.newFixedThreadPool(2, new ThreadFactoryBuilder()
                 .setNameFormat("ZenithProxy Async EventBus - #%d")
                 .setDaemon(true)
+                .setUncaughtExceptionHandler((thread, e) -> DEFAULT_LOG.error("Uncaught exception in event bus thread {}", thread, e))
                 .build()), DEFAULT_LOG);
             DIMENSION_DATA = new DimensionDataManager();
             CACHE = new DataCache();
@@ -223,6 +233,10 @@ public class Shared {
             INVENTORY = new PlayerInventoryManager();
             VIA_INITIALIZER = new ZenithViaInitializer();
             TranslationRegistryInitializer.registerAllTranslations();
+            CONFIG = loadConfig();
+            LAUNCH_CONFIG = loadLaunchConfig();
+            ConfigVerifier.verifyConfigs();
+            PLAYER_LISTS.init(); // must be init after config
         } catch (final Throwable e) {
             DEFAULT_LOG.error("Unable to initialize!", e);
             throw e;

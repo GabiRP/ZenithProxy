@@ -28,13 +28,17 @@ public class ModuleManager {
             new AutoRespawn(),
             new AutoTotem(),
             new ChatHistory(),
+            new Click(),
             new ESP(),
+            new ExtraChat(),
             new KillAura(),
             new PlayerSimulation(),
+            new QueueWarning(),
             new ReplayMod(),
             new Spammer(),
             new Spook(),
-            new VisualRange()
+            new VisualRange(),
+            new Wander()
         ).forEach(m -> {
             addModule(m);
             m.syncEnabledFromConfig();

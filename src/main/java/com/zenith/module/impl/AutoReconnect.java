@@ -1,5 +1,6 @@
 package com.zenith.module.impl;
 
+import com.google.common.collect.Sets;
 import com.zenith.Proxy;
 import com.zenith.event.proxy.AutoReconnectEvent;
 import com.zenith.event.proxy.ConnectEvent;
@@ -9,6 +10,7 @@ import com.zenith.util.Wait;
 import org.geysermc.mcprotocollib.protocol.MinecraftConstants;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Set;
 import java.util.concurrent.Future;
 
 import static com.github.rfresh2.EventConsumer.of;
@@ -27,7 +29,7 @@ public class AutoReconnect extends Module {
     }
 
     @Override
-    public boolean shouldBeEnabled() {
+    public boolean enabledSetting() {
         return CONFIG.client.extra.autoReconnect.enabled;
     }
 
@@ -51,22 +53,38 @@ public class AutoReconnect extends Module {
     }
 
     public void handleDisconnectEvent(DisconnectEvent event) {
-        if (!CONFIG.client.extra.utility.actions.autoDisconnect.autoClientDisconnect) {
-            // skip autoreconnect when we want to sync client disconnect
-            if (CONFIG.client.extra.autoReconnect.enabled && isReconnectableDisconnect(event.reason())) {
-                if (autoReconnectIsInProgress()) return;
-                this.autoReconnectFuture = EXECUTOR.submit(this::autoReconnectRunnable);
-            }
+        if (shouldAutoDisconnectCancelAutoReconnect(event)) {
+            info("Cancelling AutoReconnect due to AutoDisconnect cancelAutoReconnect");
+            return;
         }
+        if (isReconnectableDisconnect(event.reason())) {
+            scheduleAutoReconnect(CONFIG.client.extra.autoReconnect.delaySeconds);
+        } else {
+            info("Cancelling AutoReconnect because disconnect reason is not reconnectable");
+        }
+    }
+
+    public void scheduleAutoReconnect(final int delaySeconds) {
+        if (autoReconnectIsInProgress()) {
+            info("AutoReconnect already in progress, not starting another");
+            return;
+        }
+        this.autoReconnectFuture = EXECUTOR.submit(() -> autoReconnectRunnable(delaySeconds));
+    }
+
+    public boolean shouldAutoDisconnectCancelAutoReconnect(DisconnectEvent event) {
+        return CONFIG.client.extra.utility.actions.autoDisconnect.enabled
+            && CONFIG.client.extra.utility.actions.autoDisconnect.cancelAutoReconnect
+            && AutoDisconnect.isAutoDisconnectReason(event.reason());
     }
 
     public void handleConnectEvent(ConnectEvent event) {
         cancelAutoReconnect();
     }
 
-    private void autoReconnectRunnable() {
+    private void autoReconnectRunnable(int delaySeconds) {
         try {
-            delayBeforeReconnect();
+            delayBeforeReconnect(delaySeconds);
             if (Thread.currentThread().isInterrupted()) return;
             EXECUTOR.execute(() -> {
                 try {
@@ -81,25 +99,32 @@ public class AutoReconnect extends Module {
         }
     }
 
-    private void delayBeforeReconnect() {
-        final int countdown = CONFIG.client.extra.autoReconnect.delaySeconds;
+    private void delayBeforeReconnect(int delaySeconds) {
+        final int countdown = delaySeconds;
         EVENT_BUS.postAsync(new AutoReconnectEvent(countdown));
         // random jitter to help prevent multiple clients from logging in at the same time
-        Wait.wait((((int) (Math.random() * 5))) % 10);
+        Wait.waitRandomMs(1000);
         for (int i = countdown; i > 0; i-=10) {
             info("Reconnecting in {}s", i);
-            Wait.wait(10);
+            Wait.wait(Math.min(10, i));
         }
     }
 
+    private static final Set<String> RECONNECTABLE_DISCONNECT_REASONS = Sets.newHashSet(
+        SYSTEM_DISCONNECT,
+        MANUAL_DISCONNECT,
+        MinecraftConstants.SERVER_CLOSING_MESSAGE,
+        LOGIN_FAILED,
+        AUTH_REQUIRED,
+        MAX_PT_DISCONNECT
+    );
+
     private boolean isReconnectableDisconnect(final String reason) {
-        if (reason.equals(SYSTEM_DISCONNECT)
-            || reason.equals(MANUAL_DISCONNECT)
-            || reason.equals(MinecraftConstants.SERVER_CLOSING_MESSAGE)
-            || reason.equals(LOGIN_FAILED)
-        ) {
+        if (RECONNECTABLE_DISCONNECT_REASONS.contains(reason)) {
             return false;
-        } else if (reason.equals(AUTO_DISCONNECT)) {
+        } else if (ActiveHours.isActiveHoursDisconnect(reason)) {
+            return false;
+        } else if (AutoDisconnect.isAutoDisconnectReason(reason)) {
             return (!CONFIG.client.extra.utility.actions.autoDisconnect.cancelAutoReconnect && !Proxy.getInstance().isPrio());
         } else {
             return true;

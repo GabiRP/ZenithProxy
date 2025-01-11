@@ -3,14 +3,10 @@ package com.zenith.feature.world.raycast;
 import com.zenith.cache.data.entity.Entity;
 import com.zenith.cache.data.entity.EntityPlayer;
 import com.zenith.feature.world.World;
-import com.zenith.mc.block.Block;
-import com.zenith.mc.block.BlockRegistry;
-import com.zenith.mc.block.CollisionBox;
-import com.zenith.mc.block.LocalizedCollisionBox;
+import com.zenith.mc.block.*;
 import com.zenith.mc.entity.EntityData;
 import com.zenith.util.math.MathHelper;
 import org.cloudburstmc.math.vector.Vector3d;
-import org.geysermc.mcprotocollib.protocol.data.game.entity.object.Direction;
 
 import java.util.List;
 
@@ -41,8 +37,8 @@ public class RaycastHelper {
         int resY = MathHelper.floorI(startY);
         int resZ = MathHelper.floorI(startZ);
         Block block = getBlockAt(resX, resY, resZ, includeFluids);
-        if (!block.equals(BlockRegistry.AIR)) {
-            return new BlockRaycastResult(true, resX, resY, resZ, Direction.DOWN, block);
+        if (!BLOCK_DATA.isAir(block)) {
+            return new BlockRaycastResult(true, resX, resY, resZ, new RayIntersection(startX, startY, startZ, Direction.DOWN), block);
         }
 
         final double dx = endX - startX;
@@ -77,7 +73,7 @@ public class RaycastHelper {
 
             final int blockStateId = World.getBlockStateId(resX, resY, resZ);
             block = BLOCK_DATA.getBlockDataFromBlockStateId(blockStateId);
-            if (!block.equals(BlockRegistry.AIR)) {
+            if (!BLOCK_DATA.isAir(block)) {
                 var raycastResult = checkBlockRaycast(startX, startY, startZ, endX, endY, endZ, resX, resY, resZ, blockStateId, block, includeFluids);
                 if (raycastResult.hit()) return raycastResult;
             }
@@ -116,10 +112,10 @@ public class RaycastHelper {
             EntityData data = ENTITY_DATA.getEntityData(e.getEntityType());
             if (data == null) continue;
             LocalizedCollisionBox cb = entityCollisionBox(e, data);
-            LocalizedCollisionBox.RayIntersection intersection = cb.rayIntersection(startX, startY, startZ, endX, endY, endZ);
+            RayIntersection intersection = cb.rayIntersection(startX, startY, startZ, endX, endY, endZ);
             if (intersection != null) {
                 resultRaycastDistanceToStart = entityDistanceToStartPos;
-                resultRaycast = new EntityRaycastResult(true, e);
+                resultRaycast = new EntityRaycastResult(true, intersection, e);
             }
         }
         return resultRaycast;
@@ -159,22 +155,23 @@ public class RaycastHelper {
         Block block,
         boolean includeFluids) {
         if (!includeFluids && World.isWater(block)) {
-            return new BlockRaycastResult(false, 0, 0, 0, Direction.UP, BlockRegistry.AIR);
+            return new BlockRaycastResult(false, 0, 0, 0, null, BlockRegistry.AIR);
         }
-        final List<CollisionBox> collisionBoxes = BLOCK_DATA.getCollisionBoxesFromBlockStateId(blockStateId);
+        final List<CollisionBox> collisionBoxes = BLOCK_DATA.getInteractionBoxesFromBlockStateId(blockStateId);
         if (collisionBoxes == null || collisionBoxes.isEmpty()) return BlockRaycastResult.miss();
 
-        // replace stream with efficient for loop
         BlockRaycastResult result = BlockRaycastResult.miss();
         double prevLen = Double.MAX_VALUE;
 
-        for (CollisionBox collisionBox : collisionBoxes) {
-            final LocalizedCollisionBox cb = new LocalizedCollisionBox(collisionBox, blockX, blockY, blockZ);
-            final LocalizedCollisionBox.RayIntersection intersection = cb.rayIntersection(x, y, z, x2, y2, z2);
+        List<LocalizedCollisionBox> localizedCollisionBoxes = BLOCK_DATA.localizeCollisionBoxes(collisionBoxes, block, blockX, blockY, blockZ);
+
+        for (int i = 0; i < localizedCollisionBoxes.size(); i++) {
+            final LocalizedCollisionBox cb = localizedCollisionBoxes.get(i);
+            final RayIntersection intersection = cb.rayIntersection(x, y, z, x2, y2, z2);
             if (intersection == null) continue;
             final double thisLen = MathHelper.squareLen(intersection.x(), intersection.y(), intersection.z());
             if (thisLen < prevLen) {
-                result = new BlockRaycastResult(true, blockX, blockY, blockZ, intersection.intersectingFace(), block);
+                result = new BlockRaycastResult(true, blockX, blockY, blockZ, intersection, block);
                 prevLen = thisLen;
             }
         }
@@ -196,8 +193,8 @@ public class RaycastHelper {
         final EntityRaycastResult entityRaycastResult = entityRaycast(x, y, z, x2, y2, z2);
         // if both hit, return the one that is closer to the start point
         if (blockRaycastResult.hit() && entityRaycastResult.hit()) {
-            final double blockDist = MathHelper.distanceSq3d(x, y, z, blockRaycastResult.x(), blockRaycastResult.y(), blockRaycastResult.z());
-            final double entityDist = MathHelper.distanceSq3d(x, y, z, entityRaycastResult.entity().getX(), entityRaycastResult.entity().getY(), entityRaycastResult.entity().getZ());
+            final double blockDist = MathHelper.distanceSq3d(x, y, z, blockRaycastResult.intersection().x(), blockRaycastResult.intersection().y(), blockRaycastResult.intersection().z());
+            final double entityDist = MathHelper.distanceSq3d(x, y, z, entityRaycastResult.intersection().x(), entityRaycastResult.intersection().y(), entityRaycastResult.intersection().z());
             if (blockDist < entityDist) {
                 return new BlockOrEntityRaycastResult(true, blockRaycastResult, null);
             } else {

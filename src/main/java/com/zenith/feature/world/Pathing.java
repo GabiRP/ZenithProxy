@@ -31,7 +31,7 @@ public class Pathing {
      */
 
     public synchronized void moveReq(final MovementInputRequest movementInputRequest) {
-        if (movementInputRequest.priority() <= currentMovementInputRequest.priority()) return;
+        if (movementInputRequest.priority() < currentMovementInputRequest.priority()) return;
         currentMovementInputRequest = movementInputRequest;
     }
 
@@ -48,25 +48,25 @@ public class Pathing {
     public synchronized void moveRotTowards(final double x, final double z, final int priority) {
         if (priority < currentMovementInputRequest.priority()) return;
         final float yaw = yawToXZ(x, z);
-        currentMovementInputRequest = new MovementInputRequest(Optional.of(forwardInput()), Optional.of(yaw), Optional.empty(), priority);
+        currentMovementInputRequest = new MovementInputRequest(Optional.of(forwardInput), Optional.of(yaw), Optional.empty(), priority);
     }
 
     public synchronized void moveRotTowards(final double x, final double y, final double z, final int priority) {
         if (priority < currentMovementInputRequest.priority()) return;
         final Vector2f rotationTo = rotationTo(x, y, z);
-        currentMovementInputRequest = new MovementInputRequest(Optional.of(forwardInput()), Optional.of(rotationTo.getX()), Optional.of(rotationTo.getY()), priority);
+        currentMovementInputRequest = new MovementInputRequest(Optional.of(forwardInput), Optional.of(rotationTo.getX()), Optional.of(rotationTo.getY()), priority);
     }
 
     public synchronized void moveRotTowardsBlockPos(final int x, final int z, final int priority) {
         if (priority < currentMovementInputRequest.priority()) return;
         final float yaw = yawToXZ(x + 0.5, z + 0.5);
-        currentMovementInputRequest = new MovementInputRequest(Optional.of(forwardInput()), Optional.of(yaw), Optional.empty(), priority);
+        currentMovementInputRequest = new MovementInputRequest(Optional.of(forwardInput), Optional.of(yaw), Optional.empty(), priority);
     }
 
     public synchronized void moveRotSneakTowardsBlockPos(final int x, final int z, final int priority) {
         if (priority < currentMovementInputRequest.priority()) return;
         final float yaw = yawToXZ(x + 0.5, z + 0.5);
-        currentMovementInputRequest = new MovementInputRequest(Optional.of(forwardSneakInput()), Optional.of(yaw), Optional.empty(), priority);
+        currentMovementInputRequest = new MovementInputRequest(Optional.of(forwardSneakInput), Optional.of(yaw), Optional.empty(), priority);
     }
 
     public synchronized void move(final Input input, final int priority) {
@@ -102,14 +102,13 @@ public class Pathing {
 
     public synchronized void jump(final int priority) {
         if (priority < currentMovementInputRequest.priority()) return;
-        currentMovementInputRequest = new MovementInputRequest(Optional.of(jumpInput()), Optional.empty(), Optional.empty(), priority);
+        currentMovementInputRequest = new MovementInputRequest(Optional.of(jumpInput), Optional.empty(), Optional.empty(), priority);
     }
 
     public synchronized void handleTick(final ClientBotTick event) {
-        if (currentMovementInputRequest != DEFAULT_MOVEMENT_INPUT_REQUEST) {
-            MODULE.get(PlayerSimulation.class).doMovement(currentMovementInputRequest);
-            currentMovementInputRequest = DEFAULT_MOVEMENT_INPUT_REQUEST;
-        }
+        if (currentMovementInputRequest == DEFAULT_MOVEMENT_INPUT_REQUEST) return;
+        MODULE.get(PlayerSimulation.class).doMovement(currentMovementInputRequest);
+        currentMovementInputRequest = DEFAULT_MOVEMENT_INPUT_REQUEST;
     }
 
     // todo: Pathing interface based on goals
@@ -119,40 +118,21 @@ public class Pathing {
      * Helper methods for immediate movement mode
      */
 
-    public static Input forwardInput() {
-        return new Input(
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false
-        );
+    public static final Input forwardInput = new Input();
+    static {
+        forwardInput.pressingForward = true;
     }
 
-    public static Input forwardSneakInput() {
-        return new Input(
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false
-        );
+
+    public static final Input forwardSneakInput = new Input();
+    static {
+        forwardSneakInput.pressingForward = true;
+        forwardSneakInput.sneaking = true;
     }
 
-    public static Input jumpInput() {
-        return new Input(
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false
-        );
+    public static final Input jumpInput = new Input();
+    static {
+        jumpInput.jumping = true;
     }
 
     public static float yawToXZ(final double x, final double z) {
@@ -201,16 +181,10 @@ public class Pathing {
     public static double getCurrentPlayerX() {
         return MathHelper.round(CACHE.getPlayerCache().getX(), 5);
     }
-
     public static double getCurrentPlayerY() {
         return MathHelper.round(CACHE.getPlayerCache().getY(), 5);
     }
-
     public static double getCurrentPlayerZ() {
         return MathHelper.round(CACHE.getPlayerCache().getZ(), 5);
-    }
-
-    public static Position getCurrentPlayerPos() {
-        return new Position(MathHelper.round(CACHE.getPlayerCache().getX(), 5), MathHelper.round(CACHE.getPlayerCache().getY(), 5), MathHelper.round(CACHE.getPlayerCache().getZ(), 5));
     }
 }

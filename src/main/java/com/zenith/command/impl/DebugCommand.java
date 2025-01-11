@@ -29,7 +29,6 @@ public class DebugCommand extends Command {
             Debug settings for features in testing or for use in development.
             """,
             asList(
-                "deprecationWarning on/off",
                 "sync inventory",
                 "sync chunks",
                 "clearEffects",
@@ -37,15 +36,14 @@ public class DebugCommand extends Command {
                 "packetLog client on/off", // todo: subcommands for configuring subsettings more explicitly
                 "packetLog server on/off",
                 "packetLog filter <string>",
-                "sendChunksBeforePlayerSpawn on/off",
                 "binaryNbtComponentSerializer on/off",
                 "kickDisconnect on/off",
                 "dc",
                 "teleportResync on/off",
                 "ncpStrictInventory on/off",
-                "clientTickFixedRate on/off",
                 "debugLogs on/off",
-                "blockProtocolSwitchRaceCondition on/off"
+                "chunkCacheFullbright on/off",
+                "enforceSpawnSeq on/off"
             )
         );
     }
@@ -102,7 +100,13 @@ public class DebugCommand extends Command {
                                     c.getSource().getEmbed()
                                         .title("Packet Log Filter Set: " + CONFIG.debug.packetLog.packetFilter);
                                     return OK;
-                                }))))
+                                })))
+                      .then(literal("logLevelDebug").then(argument("toggle", toggle()).executes(c -> {
+                            CONFIG.debug.packetLog.logLevelDebug = getToggle(c, "toggle");
+                            c.getSource().getEmbed()
+                                .title("Log Level Debug " + toggleStrCaps(CONFIG.debug.packetLog.logLevelDebug));
+                          return OK;
+                      }))))
             .then(literal("sync")
                         .then(literal("inventory").executes(c -> {
                             PlayerCache.sync();
@@ -126,28 +130,21 @@ public class DebugCommand extends Command {
                 }
                 c.getSource().getEmbed()
                     .title("Cleared Effects");
-                return 1;
+                return OK;
             }))
-            .then(literal("sendChunksBeforePlayerSpawn")
-                      .then(argument("toggle", toggle()).executes(c -> {
-                          CONFIG.debug.sendChunksBeforePlayerSpawn = getToggle(c, "toggle");
-                          c.getSource().getEmbed()
-                              .title("Send Chunks Before Player Spawn " + toggleStrCaps(CONFIG.debug.sendChunksBeforePlayerSpawn));
-                          return 1;
-                      })))
             .then(literal("binaryNbtComponentSerializer")
                       .then(argument("toggle", toggle()).executes(c -> {
                           CONFIG.debug.binaryNbtComponentSerializer = getToggle(c, "toggle");
                           MinecraftCodecHelper.useBinaryNbtComponentSerializer = CONFIG.debug.binaryNbtComponentSerializer;
                           c.getSource().getEmbed()
                               .title("Binary Nbt Component Serializer " + toggleStrCaps(CONFIG.debug.binaryNbtComponentSerializer));
-                          return 1;
+                          return OK;
                       })))
             .then(literal("kickDisconnect").then(argument("toggle", toggle()).executes(c -> {
                 CONFIG.debug.kickDisconnect = getToggle(c, "toggle");
                 c.getSource().getEmbed()
                     .title("Kick Disconnect " + toggleStrCaps(CONFIG.debug.kickDisconnect));
-                return 1;
+                return OK;
             })))
             // insta disconnect
             .then(literal("dc").executes(c -> {
@@ -158,18 +155,12 @@ public class DebugCommand extends Command {
                 CONFIG.debug.resyncTeleports = getToggle(c, "toggle");
                 c.getSource().getEmbed()
                     .title("Teleport Resync " + toggleStrCaps(CONFIG.debug.resyncTeleports));
-                return 1;
+                return OK;
             })))
             .then(literal("ncpStrictInventory").then(argument("toggle", toggle()).executes(c -> {
                 CONFIG.debug.ncpStrictInventory = getToggle(c, "toggle");
                 c.getSource().getEmbed()
                     .title("NCP Strict Inventory " + toggleStrCaps(CONFIG.debug.ncpStrictInventory));
-                return 1;
-            })))
-            .then(literal("clientTickFixedRate").then(argument("toggle", toggle()).executes(c -> {
-                CONFIG.debug.clientTickFixedRate = getToggle(c, "toggle");
-                c.getSource().getEmbed()
-                    .title("Client Tick Fixed Rate " + toggleStrCaps(CONFIG.debug.clientTickFixedRate));
                 return OK;
             })))
             .then(literal("debugLogs").then(argument("toggle", toggle()).executes(c -> {
@@ -178,10 +169,16 @@ public class DebugCommand extends Command {
                     .title("Debug Logs " + toggleStrCaps(CONFIG.debug.debugLogs));
                 return OK;
             })))
-            .then(literal("blockProtocolSwitchRaceCondition").then(argument("toggle", toggle()).executes(c -> {
-                CONFIG.debug.blockProtocolSwitchRaceCondition = getToggle(c, "toggle");
+            .then(literal("chunkCacheFullbright").then(argument("toggle", toggle()).executes(c -> {
+                CONFIG.debug.server.cache.fullbrightChunkSkylight = getToggle(c, "toggle");
                 c.getSource().getEmbed()
-                    .title("Block Protocol Race Condition " + toggleStrCaps(CONFIG.debug.blockProtocolSwitchRaceCondition));
+                    .title("Chunk Cache Fullbright " + toggleStrCaps(CONFIG.debug.server.cache.fullbrightChunkSkylight));
+                return OK;
+            })))
+            .then(literal("enforceSpawnSeq").then(argument("toggle", toggle()).executes(c -> {
+                CONFIG.debug.enforcePlayerSpawnSequence = getToggle(c, "toggle");
+                c.getSource().getEmbed()
+                    .title("Enforce Spawn Seq " + toggleStrCaps(CONFIG.debug.enforcePlayerSpawnSequence));
                 return OK;
             })));
     }
@@ -193,14 +190,13 @@ public class DebugCommand extends Command {
             .addField("Client Packet Log", toggleStr(CONFIG.debug.packetLog.clientPacketLog.received), false)
             .addField("Server Packet Log", toggleStr(CONFIG.debug.packetLog.serverPacketLog.received), false)
             .addField("Packet Log Filter", CONFIG.debug.packetLog.packetFilter, false)
-            .addField("Send Chunks Before Player Spawn", toggleStr(CONFIG.debug.sendChunksBeforePlayerSpawn), false)
             .addField("Binary Nbt Component Serializer", toggleStr(CONFIG.debug.binaryNbtComponentSerializer), false)
             .addField("Kick Disconnect", toggleStr(CONFIG.debug.kickDisconnect), false)
             .addField("Teleport Resync", toggleStr(CONFIG.debug.resyncTeleports), false)
             .addField("NCP Strict Inventory", toggleStr(CONFIG.debug.ncpStrictInventory), false)
-            .addField("Client Tick Fixed Rate", toggleStr(CONFIG.debug.clientTickFixedRate), false)
             .addField("Debug Logs", toggleStr(CONFIG.debug.debugLogs), false)
-            .addField("Block Protocol Race Condition", toggleStr(CONFIG.debug.blockProtocolSwitchRaceCondition), false)
+            .addField("Chunk Cache Fullbright", toggleStr(CONFIG.debug.server.cache.fullbrightChunkSkylight), false)
+            .addField("Enforce Spawn Seq", toggleStr(CONFIG.debug.enforcePlayerSpawnSequence), false)
             .primaryColor();
     }
 }

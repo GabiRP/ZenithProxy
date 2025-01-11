@@ -20,6 +20,7 @@ import discord4j.core.event.domain.interaction.ButtonInteractionEvent;
 import discord4j.core.event.domain.message.MessageCreateEvent;
 import discord4j.core.object.component.ActionRow;
 import discord4j.core.object.component.Button;
+import discord4j.core.object.entity.Member;
 import discord4j.core.object.entity.User;
 import discord4j.core.object.presence.ClientActivity;
 import discord4j.core.object.presence.ClientPresence;
@@ -71,13 +72,13 @@ public class DiscordBot {
     private RestClient restClient;
     private RestChannel mainRestChannel;
     private RestChannel relayRestChannel;
-    GatewayDiscordClient client;
+    public GatewayDiscordClient client;
     // Main channel discord message FIFO queue
     private final ConcurrentLinkedQueue<MultipartRequest<MessageCreateRequest>> mainChannelMessageQueue;
     private final ConcurrentLinkedQueue<MultipartRequest<MessageCreateRequest>> relayChannelMessageQueue;
-    final ClientPresence disconnectedPresence = ClientPresence.of(Status.DO_NOT_DISTURB, ClientActivity.custom(
+    public final ClientPresence disconnectedPresence = ClientPresence.of(Status.DO_NOT_DISTURB, ClientActivity.custom(
         "Disconnected"));
-    final Supplier<ClientPresence> defaultConnectedPresence = () -> ClientPresence.of(Status.ONLINE, ClientActivity.custom(
+    public final Supplier<ClientPresence> defaultConnectedPresence = () -> ClientPresence.of(Status.ONLINE, ClientActivity.custom(
         (Proxy.getInstance().isOn2b2t() ? "2b2t" : CONFIG.client.server.address)));
     public Optional<Instant> lastRelaymessage = Optional.empty();
 
@@ -87,21 +88,14 @@ public class DiscordBot {
     private ScheduledFuture<?> mainChannelMessageQueueProcessFuture;
     private ScheduledFuture<?> relayChannelMessageQueueProcessFuture;
 
-    private final DiscordEventListener eventListener = new DiscordEventListener(this);
-
     public DiscordBot() {
         this.mainChannelMessageQueue = new ConcurrentLinkedQueue<>();
         this.relayChannelMessageQueue = new ConcurrentLinkedQueue<>();
         this.isRunning = false;
     }
 
-    public void initEventHandlers() {
-        eventListener.subscribeEvents();
-    }
-
     public synchronized void start() {
         createClient();
-        initEventHandlers();
 
         if (CONFIG.discord.isUpdating) {
             handleProxyUpdateComplete();
@@ -123,7 +117,6 @@ public class DiscordBot {
             this.mainChannelMessageQueueProcessFuture.cancel(true);
         if (this.relayChannelMessageQueueProcessFuture != null)
             this.relayChannelMessageQueueProcessFuture.cancel(true);
-        EVENT_BUS.unsubscribe(eventListener);
         if (client != null) {
             try {
                 client.logout().block(Duration.ofSeconds(20));
@@ -167,9 +160,9 @@ public class DiscordBot {
                                  .description(
                                      """
                                      You are currently using a ZenithProxy prerelease
-                                              
+                                     
                                      Prereleases include experiments that may contain bugs and are not always updated with fixes
-                                              
+                                     
                                      Switch to a stable release with the `channel` command
                                      """));
         }
@@ -205,10 +198,11 @@ public class DiscordBot {
     }
 
     private void handleDiscordMessageCreateEvent(final MessageCreateEvent event) {
+        if (event.getMember().map(Member::isBot).orElse(false) && CONFIG.discord.ignoreOtherBots) return;
+        if (event.getMember().map(Member::getId).filter(id -> id.equals(this.client.getSelfId())).isPresent()) return;
         if (CONFIG.discord.chatRelay.enable
             && !CONFIG.discord.chatRelay.channelId.isEmpty()
-            && event.getMessage().getChannelId().equals(Snowflake.of(CONFIG.discord.chatRelay.channelId))
-            && !event.getMember().get().getId().equals(this.client.getSelfId())) {
+            && event.getMessage().getChannelId().equals(Snowflake.of(CONFIG.discord.chatRelay.channelId))) {
             EVENT_BUS.postAsync(new DiscordMessageSentEvent(sanitizeRelayInputMessage(event.getMessage().getContent()), event));
             return;
         }
@@ -217,7 +211,10 @@ public class DiscordBot {
         if (!message.startsWith(CONFIG.discord.prefix)) return;
         try {
             final String inputMessage = message.substring(1);
-            DISCORD_LOG.info(event.getMember().map(User::getTag).orElse("unknown user") + " (" + event.getMember().get().getId().asString() +") executed discord command: {}", inputMessage);
+            DISCORD_LOG.info("{} ({}) executed discord command: {}",
+                             event.getMember().map(User::getTag).orElse("unknown user"),
+                             event.getMember().get().getId().asString(),
+                             inputMessage);
             final CommandContext context = DiscordCommandContext.create(inputMessage, event, mainRestChannel);
             COMMAND.execute(context);
             final MultipartRequest<MessageCreateRequest> request = commandEmbedOutputToMessage(context);
@@ -259,9 +256,11 @@ public class DiscordBot {
         } catch (final Throwable e) {
             DISCORD_LOG.error("Failed sending message to main channel. Check bot permissions.");
             DISCORD_LOG.debug("Failed sending message to main channel. Check bot permissions.", e);
-            if (mainChannelMessageQueue.size() > 100) {
-                DISCORD_LOG.error("Flushing main channel message queue to reclaim memory, current size: {}", mainChannelMessageQueue.size());
-                mainChannelMessageQueue.clear();
+        }
+        if (mainChannelMessageQueue.size() > 250) {
+            DISCORD_LOG.error("Flushing main channel message queue to reclaim memory, current size: {}", relayChannelMessageQueue.size());
+            while (mainChannelMessageQueue.size() > 100) {
+                mainChannelMessageQueue.poll();
             }
         }
     }
@@ -277,9 +276,11 @@ public class DiscordBot {
         } catch (final Throwable e) {
             DISCORD_LOG.error("Failed sending message to relay channel. Check bot permissions.");
             DISCORD_LOG.debug("Failed sending message to relay channel. Check bot permissions.", e);
-            if (relayChannelMessageQueue.size() > 100) {
-                DISCORD_LOG.error("Flushing relay channel message queue to reclaim memory, current size: {}", relayChannelMessageQueue.size());
-                relayChannelMessageQueue.clear();
+        }
+        if (relayChannelMessageQueue.size() > 250) {
+            DISCORD_LOG.error("Flushing relay channel message queue to reclaim memory, current size: {}", relayChannelMessageQueue.size());
+            while (relayChannelMessageQueue.size() > 100) {
+                relayChannelMessageQueue.poll();
             }
         }
     }
@@ -366,11 +367,12 @@ public class DiscordBot {
                              .successColor());
     }
 
-    void sendQueueWarning() {
-        sendEmbedMessage((CONFIG.discord.queueWarning.mentionRole ? mentionAccountOwner() : ""), Embed.builder()
-            .title("Queue Warning")
-            .addField("Queue Position", "[" + queuePositionStr() + "]", false)
-            .inQueueColor());
+    public static String notificationMention() {
+        return DiscordBot.mentionRole(
+            CONFIG.discord.notificationMentionRoleId.isEmpty()
+                ? CONFIG.discord.accountOwnerRoleId
+                : CONFIG.discord.notificationMentionRoleId
+        );
     }
 
     static String mentionAccountOwner() {
@@ -386,14 +388,14 @@ public class DiscordBot {
         }
     }
 
-    private String queuePositionStr() {
+    public static String queuePositionStr() {
         if (Proxy.getInstance().isPrio())
             return Proxy.getInstance().getQueuePosition() + " / " + Queue.getQueueStatus().prio() + " - ETA: " + Queue.getQueueEta(Proxy.getInstance().getQueuePosition());
         else
             return Proxy.getInstance().getQueuePosition() + " / " + Queue.getQueueStatus().regular() + " - ETA: " + Queue.getQueueEta(Proxy.getInstance().getQueuePosition());
     }
 
-    static boolean validateButtonInteractionEventFromAccountOwner(final ButtonInteractionEvent event) {
+    public static boolean validateButtonInteractionEventFromAccountOwner(final ButtonInteractionEvent event) {
         return event.getInteraction().getMember()
             .map(m -> m.getRoleIds().stream()
                 .map(Snowflake::asString)
@@ -401,13 +403,17 @@ public class DiscordBot {
             .orElse(false);
     }
 
-    Embed getUpdateMessage(final Optional<String> newVersion) {
+    public Embed getUpdateMessage(final Optional<String> newVersion) {
         String verString = "Current Version: `" + escape(LAUNCH_CONFIG.version) + "`";
         if (newVersion.isPresent()) verString += "\nNew Version: `" + escape(newVersion.get()) + "`";
-        return Embed.builder()
+        var embed = Embed.builder()
             .title("Updating and restarting...")
             .description(verString)
             .primaryColor();
+        if (!LAUNCH_CONFIG.auto_update) {
+            embed.addField("Info", "`autoUpdate` must be enabled for new updates to apply", false);
+        }
+        return embed;
     }
 
     public static boolean isAllowedChatCharacter(char c0) {
@@ -443,7 +449,8 @@ public class DiscordBot {
             if (embed.fileAttachment() != null) {
                 msgBuilder.addFile(embed.fileAttachment.name(), new ByteArrayInputStream(embed.fileAttachment.data()));
             }
-            mainChannelMessageQueue.add(msgBuilder.build().asRequest());
+            if (isRunning())
+                mainChannelMessageQueue.add(msgBuilder.build().asRequest());
             CommandOutputHelper.logEmbedOutputToTerminal(embed);
         } catch (final Exception e) {
             DISCORD_LOG.error("Failed sending discord embed message. Check that the bot has correct permissions");
@@ -453,9 +460,11 @@ public class DiscordBot {
 
     public void sendEmbedMessage(Embed embed) {
         try {
-            mainChannelMessageQueue.add(MessageCreateSpec.builder()
-                                            .addEmbed(embed.toSpec())
-                                            .build().asRequest());
+            if (isRunning()) {
+                mainChannelMessageQueue.add(MessageCreateSpec.builder()
+                                                .addEmbed(embed.toSpec())
+                                                .build().asRequest());
+            }
             CommandOutputHelper.logEmbedOutputToTerminal(embed);
         } catch (final Exception e) {
             DISCORD_LOG.error("Failed sending discord embed message. Check that the bot has correct permissions");
@@ -464,13 +473,16 @@ public class DiscordBot {
     }
 
     public void sendRelayEmbedMessage(Embed embedCreateSpec) {
-        relayChannelMessageQueue.add(MessageCreateSpec.builder()
+        if (!CONFIG.discord.chatRelay.enable) return;
+        if (isRunning())
+            relayChannelMessageQueue.add(MessageCreateSpec.builder()
                                         .addEmbed(embedCreateSpec.toSpec())
                                         .build().asRequest());
     }
 
     public void sendEmbedMessage(String message, Embed embed) {
-        mainChannelMessageQueue.add(MessageCreateSpec.builder()
+        if (isRunning())
+            mainChannelMessageQueue.add(MessageCreateSpec.builder()
                                         .content(message)
                                         .addEmbed(embed.toSpec())
                                         .build().asRequest());
@@ -479,54 +491,63 @@ public class DiscordBot {
     }
 
     public void sendRelayEmbedMessage(String message, Embed embed) {
-        relayChannelMessageQueue.add(MessageCreateSpec.builder()
+        if (!CONFIG.discord.chatRelay.enable) return;
+        if (isRunning())
+            relayChannelMessageQueue.add(MessageCreateSpec.builder()
                                          .content(message)
                                          .addEmbed(embed.toSpec())
                                          .build().asRequest());
     }
 
     public void sendMessage(final String message) {
-        mainChannelMessageQueue.add(MessageCreateSpec.builder()
+        if (isRunning())
+            mainChannelMessageQueue.add(MessageCreateSpec.builder()
                                         .content(message)
                                         .build().asRequest());
         TERMINAL_LOG.info(message);
     }
 
     public void sendRelayMessage(final String message) {
-        relayChannelMessageQueue.add(MessageCreateSpec.builder()
+        if (!CONFIG.discord.chatRelay.enable) return;
+        if (isRunning())
+            relayChannelMessageQueue.add(MessageCreateSpec.builder()
                                          .content(message)
                                          .build().asRequest());
     }
 
-    void sendEmbedMessageWithButtons(String message, Embed embed, List<Button> buttons, Function<ButtonInteractionEvent, Publisher<Mono<?>>> mapper, Duration timeout) {
-        mainChannelMessageQueue.add(MessageCreateSpec.builder()
+    public void sendEmbedMessageWithButtons(String message, Embed embed, List<Button> buttons, Function<ButtonInteractionEvent, Publisher<Mono<?>>> mapper, Duration timeout) {
+        if (isRunning())
+            mainChannelMessageQueue.add(MessageCreateSpec.builder()
                                         .content(message)
                                         .addEmbed(embed.toSpec())
                                         .components(ActionRow.of(buttons))
                                         .build().asRequest());
         TERMINAL_LOG.info(message);
         CommandOutputHelper.logEmbedOutputToTerminal(embed);
-        client.getEventDispatcher()
-            .on(ButtonInteractionEvent.class, mapper)
-            .timeout(timeout)
-            .onErrorResume(TimeoutException.class, e -> Mono.empty())
-            .subscribe();
+        if (isRunning())
+            client.getEventDispatcher()
+                .on(ButtonInteractionEvent.class, mapper)
+                .timeout(timeout)
+                .onErrorResume(TimeoutException.class, e -> Mono.empty())
+                .subscribe();
     }
 
-    void sendEmbedMessageWithButtons(Embed embed, List<Button> buttons, Function<ButtonInteractionEvent, Publisher<Mono<?>>> mapper, Duration timeout) {
-        mainChannelMessageQueue.add(MessageCreateSpec.builder()
+    public void sendEmbedMessageWithButtons(Embed embed, List<Button> buttons, Function<ButtonInteractionEvent, Publisher<Mono<?>>> mapper, Duration timeout) {
+        if (isRunning())
+            mainChannelMessageQueue.add(MessageCreateSpec.builder()
                                         .addEmbed(embed.toSpec())
                                         .components(ActionRow.of(buttons))
                                         .build().asRequest());
         CommandOutputHelper.logEmbedOutputToTerminal(embed);
-        client.getEventDispatcher()
-            .on(ButtonInteractionEvent.class, mapper)
-            .timeout(timeout)
-            .onErrorResume(TimeoutException.class, e -> Mono.empty())
-            .subscribe();
+        if (isRunning())
+            client.getEventDispatcher()
+                .on(ButtonInteractionEvent.class, mapper)
+                .timeout(timeout)
+                .onErrorResume(TimeoutException.class, e -> Mono.empty())
+                .subscribe();
     }
 
-    ClientPresence getQueuePresence() {
+    public ClientPresence getQueuePresence() {
         return ClientPresence.of(Status.IDLE, ClientActivity.custom(queuePositionStr()));
     }
 
@@ -568,7 +589,7 @@ public class DiscordBot {
         });
     }
 
-    String extractRelayEmbedSenderUsername(final Possible<Integer> color, final String msgContent) {
+    public String extractRelayEmbedSenderUsername(final Possible<Integer> color, final String msgContent) {
         final String sender;
         if (!color.isAbsent() && color.get() == Color.MAGENTA.getRGB()) {
             // extract whisper sender
@@ -584,6 +605,7 @@ public class DiscordBot {
     }
 
     public void updatePresence(final ClientPresence presence) {
-        this.client.updatePresence(presence).block(BLOCK_TIMEOUT);
+        if (isRunning())
+            this.client.updatePresence(presence).block(BLOCK_TIMEOUT);
     }
 }

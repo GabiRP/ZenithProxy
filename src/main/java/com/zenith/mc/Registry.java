@@ -1,5 +1,6 @@
 package com.zenith.mc;
 
+import com.zenith.util.Maps;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import lombok.Getter;
@@ -10,7 +11,7 @@ public class Registry<T extends RegistryData> {
     private final Int2ObjectOpenHashMap<T> idMap;
 
     public Registry(int size) {
-        idMap = new Int2ObjectOpenHashMap<>(size);
+        idMap = new Int2ObjectOpenHashMap<>(size, Maps.FAST_LOAD_FACTOR);
     }
 
     public T register(@NotNull T value) {
@@ -29,5 +30,9 @@ public class Registry<T extends RegistryData> {
             }
         }
         return null;
+    }
+
+    public int size() {
+        return idMap.size();
     }
 }

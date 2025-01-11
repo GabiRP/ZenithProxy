@@ -5,6 +5,8 @@ import org.cloudburstmc.math.vector.Vector3d;
 
 import java.time.Duration;
 
+import static com.zenith.Shared.DEFAULT_LOG;
+
 @UtilityClass
 public class MathHelper {
     public static double squareLen(double a, double b, double c) {
@@ -71,6 +73,10 @@ public class MathHelper {
         return Math.max(min, Math.min(max, value));
     }
 
+    public static double clamp(final double value, final double min, final double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     public static double distance2d(double x1, double y1, double x2, double y2) {
         return Math.sqrt(square(x1 - x2) + square(y1 - y2));
     }
@@ -95,6 +101,10 @@ public class MathHelper {
         return start + delta * (end - start);
     }
 
+    public static float lerp(float delta, float start, float end) {
+        return start + delta * (end - start);
+    }
+
     public static long lfloor(double d) {
         long i = (long)d;
         return d < (double)i ? i - 1L : i;
@@ -112,8 +122,26 @@ public class MathHelper {
         }
     }
 
-    public static boolean isNear(float val, float target, float range) {
-        return val > target - range && val < target + range;
+    public static boolean isPitchInRange(float pitch1, float pitch2, float range) {
+        if (pitch1 < -90 || pitch1 > 90 || pitch2 < -90 || pitch2 > 90) {
+            DEFAULT_LOG.warn("Pitch value out of range: {} {}", pitch1, pitch2);
+            return false; // pitch values should never exceed [-90, 90] as there is no wrapping
+        }
+        return Math.abs(pitch1 - pitch2) <= range;
+    }
+
+    public static boolean isYawInRange(float yaw1, float yaw2, float range) {
+        yaw1 = wrapYaw(yaw1);
+        yaw2 = wrapYaw(yaw2);
+        float difference = yaw1 - yaw2;
+        // Circle wraps around at [-180, 180]
+        // yaw values can and will exceed this range
+        if (difference > 180) {
+            difference -= 360;
+        } else if (difference < -180) {
+            difference += 360;
+        }
+        return Math.abs(difference) <= range;
     }
 
     public static Vector3d calculateRayEndPos(double x, double y, double z, double yaw, double pitch, double maxDistance) {
@@ -167,5 +195,11 @@ public class MathHelper {
         i |= i >> 8;
         i |= i >> 16;
         return i + 1;
+    }
+
+    public static long getSeed(int x, int y, int z) {
+        long l = (long)(x * 3129871) ^ (long)z * 116129781L ^ (long)y;
+        l = l * l * 42317861L + l * 11L;
+        return l >> 16;
     }
 }

@@ -4,7 +4,6 @@ import com.zenith.Proxy;
 import com.zenith.event.module.ClientBotTick;
 import com.zenith.event.proxy.DeathEvent;
 import com.zenith.module.Module;
-import com.zenith.util.Timer;
 import org.geysermc.mcprotocollib.protocol.data.game.ClientCommand;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundClientCommandPacket;
 
@@ -16,21 +15,22 @@ import static com.zenith.Shared.*;
 public class AutoRespawn extends Module {
     private static final int tickEventRespawnDelay = 100;
     private int tickCounter = 0;
-    private Timer tickTimer = Timer.newTickTimer();
+
     public AutoRespawn() {
         super();
     }
 
     @Override
     public void subscribeEvents() {
-        EVENT_BUS.subscribe(this,
-                            of(ClientBotTick.class, this::handleClientTickEvent),
-                            of(DeathEvent.class, this::handleDeathEvent)
+        EVENT_BUS.subscribe(
+            this,
+            of(ClientBotTick.class, this::handleClientTickEvent),
+            of(DeathEvent.class, this::handleDeathEvent)
         );
     }
 
     @Override
-    public boolean shouldBeEnabled() {
+    public boolean enabledSetting() {
         return CONFIG.client.extra.autoRespawn.enabled;
     }
 
@@ -50,7 +50,7 @@ public class AutoRespawn extends Module {
 
     private void checkAndRespawn() {
         if (Proxy.getInstance().isConnected()
-            && CACHE.getPlayerCache().getThePlayer().getHealth() <= 0
+            && !CACHE.getPlayerCache().isAlive()
             && !Proxy.getInstance().hasActivePlayer()
         ) {
             info("Performing Respawn");

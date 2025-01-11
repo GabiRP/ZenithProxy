@@ -3,8 +3,10 @@ package com.zenith.network.server.handler.shared.incoming;
 import com.zenith.feature.ratelimiter.RateLimiter;
 import com.zenith.network.registry.PacketHandler;
 import com.zenith.network.server.ServerSession;
+import com.zenith.via.ZenithViaInitializer;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.ProtocolState;
+import org.geysermc.mcprotocollib.protocol.data.handshake.HandshakeIntent;
 import org.geysermc.mcprotocollib.protocol.packet.handshake.serverbound.ClientIntentionPacket;
 
 import static com.zenith.Shared.CONFIG;
@@ -16,8 +18,18 @@ public class IntentionHandler implements PacketHandler<ClientIntentionPacket, Se
     @Override
     public ClientIntentionPacket apply(final ClientIntentionPacket packet, final ServerSession session) {
         MinecraftProtocol protocol = session.getPacketProtocol();
+        updateSessionMCVersion(session, packet);
+        session.setConnectingServerAddress(packet.getHostname());
+        session.setConnectingServerPort(packet.getPort());
+        if (mismatchedConnectingAddress(packet, session)) return null;
         switch (packet.getIntent()) {
-            case STATUS -> protocol.setState(ProtocolState.STATUS);
+            case STATUS -> {
+                protocol.setOutboundState(ProtocolState.STATUS);
+                session.switchInboundState(ProtocolState.STATUS);
+                if (!CONFIG.server.ping.enabled) {
+                    session.disconnect("bye");
+                }
+            }
             case LOGIN -> {
                 if (handleLogin(packet, session, protocol)) return null;
             }
@@ -32,12 +44,38 @@ public class IntentionHandler implements PacketHandler<ClientIntentionPacket, Se
             }
             default -> session.disconnect("Invalid client intention: " + packet.getIntent());
         }
-        session.setProtocolVersion(packet.getProtocolVersion());
         return null;
     }
 
+    private static boolean mismatchedConnectingAddress(final ClientIntentionPacket packet, final ServerSession session) {
+        if (!CONFIG.server.enforceMatchingConnectingAddress) return false;
+        // special handling in here is related to how the mc client handles srv records and intents
+        var hostname = packet.getHostname();
+        if (packet.getIntent() == HandshakeIntent.LOGIN && hostname.endsWith(".")) {
+            // remove trailing dot
+            hostname = packet.getHostname().substring(0, packet.getHostname().length() - 1);
+        }
+        boolean hostnameMatch = CONFIG.server.getProxyAddressForTransfer().equals(hostname);
+        boolean portMatch = CONFIG.server.getProxyPortForTransfer() == packet.getPort();
+        if (packet.getIntent() == HandshakeIntent.STATUS) {
+            portMatch = portMatch || 25565 == packet.getPort();
+        }
+        if (!hostnameMatch || !portMatch) {
+            SERVER_LOG.info(
+                "Disconnecting {} [{}] with intent: {} due to mismatched connecting server address. Expected: {} Actual: {}",
+                session.getRemoteAddress(),
+                session.getMCVersion(),
+                packet.getIntent(),
+                CONFIG.server.getProxyAddressForTransfer() + ":" + CONFIG.server.getProxyPortForTransfer(),
+                hostname + ":" + packet.getPort());
+            session.disconnect("bye");
+            return true;
+        }
+        return false;
+    }
+
     private boolean handleLogin(final ClientIntentionPacket packet, final ServerSession session, final MinecraftProtocol protocol) {
-        protocol.setState(ProtocolState.LOGIN);
+        protocol.setOutboundState(ProtocolState.LOGIN);
         if (CONFIG.server.rateLimiter.enabled && rateLimiter.isRateLimited(session)) {
             SERVER_LOG.info("Disconnecting {} due to rate limiting.", session.getRemoteAddress());
             session.disconnect("Login Rate Limited.");
@@ -47,11 +85,26 @@ public class IntentionHandler implements PacketHandler<ClientIntentionPacket, Se
             SERVER_LOG.info("Disconnecting {} due to outdated server version.", session.getRemoteAddress());
             session.disconnect("Outdated server! I'm still on " + protocol.getCodec()
                 .getMinecraftVersion() + ".");
+            return true;
         } else if (packet.getProtocolVersion() < protocol.getCodec().getProtocolVersion()) {
             SERVER_LOG.info("Disconnecting {} due to outdated client version.", session.getRemoteAddress());
             session.disconnect("Outdated client! Please use " + protocol.getCodec()
                 .getMinecraftVersion() + ".");
+            return true;
         }
+        session.switchInboundState(ProtocolState.LOGIN);
         return false;
+    }
+
+    private void updateSessionMCVersion(ServerSession session, ClientIntentionPacket packet) {
+        if (CONFIG.server.viaversion.enabled && session.getChannel().hasAttr(ZenithViaInitializer.VIA_USER)) {
+            var userConnection = session.getChannel().attr(ZenithViaInitializer.VIA_USER).get();
+            var protocolVersion = userConnection.getProtocolInfo().protocolVersion();
+            if (protocolVersion != null) {
+                session.setProtocolVersionId(protocolVersion.getVersion());
+                return;
+            }
+        }
+        session.setProtocolVersionId(packet.getProtocolVersion());
     }
 }

@@ -14,13 +14,17 @@ import static com.zenith.Shared.CACHE;
 public class LoginAckHandler implements PacketHandler<ServerboundLoginAcknowledgedPacket, ServerSession> {
     @Override
     public ServerboundLoginAcknowledgedPacket apply(final ServerboundLoginAcknowledgedPacket packet, final ServerSession session) {
-        session.getPacketProtocol().setState(ProtocolState.CONFIGURATION);
+        session.switchInboundState(ProtocolState.CONFIGURATION);
+        if (session.getPacketProtocol().getOutboundState() != ProtocolState.CONFIGURATION || !session.isWhitelistChecked()) {
+            session.disconnect("Attempted to enter configuration too early");
+            return null;
+        }
         // todo: handle this more gracefully, connect and wait until we have configuration set (assuming session is auth'd)
         if (!Proxy.getInstance().isConnected()) {
             session.disconnect("Proxy is not connected to a server.");
             return null;
         }
-        CACHE.getConfigurationCache().getPackets(session::sendAsync);
+        CACHE.getConfigurationCache().getPackets(session::sendAsync, session);
         session.sendAsync(new ClientboundCustomPayloadPacket(Key.key("minecraft:brand"), CACHE.getChunkCache().getServerBrand()));
         session.sendAsync(new ClientboundFinishConfigurationPacket());
         return null;

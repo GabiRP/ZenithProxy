@@ -4,117 +4,105 @@ import java.nio.file.Files
 
 plugins {
     java
-    id("org.graalvm.buildtools.native") version "0.10.2"
-    id("io.github.goooler.shadow") version "8.1.8"
+    id("org.graalvm.buildtools.native") version "0.10.4"
+    id("com.gradleup.shadow") version "8.3.5"
     `maven-publish`
 }
 
 group = "com.zenith"
 version = "1.21.0"
 
-val javaVersion22 = JavaLanguageVersion.of(22)
-val javaVersion21 = JavaLanguageVersion.of(21)
-val javaLauncherProvider21 = javaToolchains.launcherFor { languageVersion = javaVersion21 }
-val javaLauncherProvider22 = javaToolchains.launcherFor { languageVersion = javaVersion22 }
-java { toolchain { languageVersion = javaVersion21 } }
+val javaReleaseVersion = 21
+val javaVersion = JavaLanguageVersion.of(23)
+val javaLauncherProvider = javaToolchains.launcherFor { languageVersion = javaVersion }
+java { toolchain { languageVersion = javaVersion } }
 
 repositories {
     maven("https://maven.2b2t.vc/releases") {
         content { includeGroupByRegex("com.github.rfresh2.*") }
     }
     maven("https://libraries.minecraft.net") {
-        name = "minecraft"
         content { includeGroup("com.mojang") }
     }
     maven("https://repo.opencollab.dev/maven-releases/") {
-        name = "opencollab-release"
         content { includeGroupByRegex("org.cloudburstmc.*") }
     }
-    maven("https://papermc.io/repo/repository/maven-public/") {
-        name = "paper"
+    maven("https://repo.papermc.io/repository/maven-public/") {
         content { includeGroup("com.velocitypowered") }
     }
-    maven("https://repo.minebench.de/") {
-        name = "minebench"
-        content { includeGroup("de.themoep") }
-    }
     maven("https://repo.viaversion.com") {
-        name = "ViaVersion"
         content {
             includeGroup("com.viaversion")
             includeGroup("net.raphimc")
         }
     }
     maven("https://maven.lenni0451.net/releases") {
-        name = "Lenni0451"
         content {
             includeGroup("net.raphimc")
             includeGroup("net.lenni0451")
         }
     }
-    maven("https://repo1.maven.org/maven2/") { name = "maven central" }
+    mavenCentral()
     mavenLocal()
 }
 
 val shade: Configuration by configurations.creating
-configurations.implementation.get().extendsFrom(shade)
+shade.extendsFrom(configurations.implementation.get())
 
 dependencies {
-    shade("com.zaxxer:HikariCP:5.1.0")
-    shade("org.postgresql:postgresql:42.7.3")
-    val jdbiVersion = "3.45.2"
-    shade("org.jdbi:jdbi3-core:$jdbiVersion")
-    shade("org.jdbi:jdbi3-postgres:$jdbiVersion")
-    shade("com.google.guava:guava:33.2.1-jre")
-    shade("ch.qos.logback:logback-classic:1.5.6")
-    shade("org.slf4j:slf4j-api:2.0.13")
-    shade("org.slf4j:jul-to-slf4j:2.0.13")
-    shade("com.mojang:brigadier:1.2.9")
-    shade("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.2")
-    shade("com.github.rfresh2:SimpleEventBus:1.2")
-    shade("com.github.rfresh2.discord4j:discord4j-core:3.4.2.3") {
+    implementation("com.github.rfresh2.discord4j:discord4j-core:3.4.4.11") {
         exclude(group = "io.netty")
     }
-    shade("com.github.rfresh2:MCProtocolLib:1.21.0.3") {
-        exclude(group = "io.netty.incubator")
+    implementation("com.github.rfresh2:MCProtocolLib:1.21.0.25") {
         exclude(group = "io.netty")
     }
-    shade("net.raphimc:MinecraftAuth:4.0.2")
-    val nettyVersion = "4.1.112.Final"
-    shade("io.netty:netty-codec-haproxy:$nettyVersion")
-    shade("io.netty:netty-codec-dns:$nettyVersion")
-    shade("io.netty:netty-codec-http2:$nettyVersion")
-    shade("io.netty:netty-codec-http:$nettyVersion")
-    shade("io.netty:netty-codec-socks:$nettyVersion")
-    shade("io.netty:netty-handler-proxy:$nettyVersion")
-    shade("io.netty:netty-handler:$nettyVersion")
-    shade("io.netty:netty-resolver-dns:$nettyVersion")
-    shade("io.netty:netty-transport-classes-epoll:$nettyVersion")
-    shade("io.netty:netty-transport-native-epoll:$nettyVersion:linux-x86_64")
-    shade("io.netty:netty-transport-native-unix-common:$nettyVersion:linux-x86_64")
-    shade("io.netty:netty-resolver-dns-native-macos:$nettyVersion:osx-aarch_64")
-    shade("de.themoep:minedown-adventure:1.7.3-SNAPSHOT")
-    shade("org.cloudburstmc.math:api:2.0")
-    shade("org.cloudburstmc.math:immutable:2.0")
-    shade("org.redisson:redisson:3.32.0") {
+    val nettyVersion = "4.1.116.Final"
+    implementation("io.netty:netty-codec-haproxy:$nettyVersion")
+    implementation("io.netty:netty-codec-dns:$nettyVersion")
+    implementation("io.netty:netty-codec-http2:$nettyVersion")
+    implementation("io.netty:netty-codec-http:$nettyVersion")
+    implementation("io.netty:netty-codec-socks:$nettyVersion")
+    implementation("io.netty:netty-handler-proxy:$nettyVersion")
+    implementation("io.netty:netty-handler:$nettyVersion")
+    implementation("io.netty:netty-resolver-dns:$nettyVersion")
+    implementation("io.netty:netty-transport-classes-epoll:$nettyVersion")
+    implementation("io.netty:netty-transport-native-epoll:$nettyVersion:linux-x86_64")
+    implementation("io.netty:netty-transport-native-unix-common:$nettyVersion:linux-x86_64")
+    implementation("io.netty:netty-resolver-dns-native-macos:$nettyVersion:osx-aarch_64")
+    implementation("org.cloudburstmc.math:api:2.0")
+    implementation("org.cloudburstmc.math:immutable:2.0")
+    implementation("org.redisson:redisson:3.41.0") {
         exclude(group = "io.netty")
     }
-    val fastutilVersion = "8.5.14"
-    shade("com.github.rfresh2.fastutil.maps:object-object-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil.maps:int-object-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil.maps:object-int-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil.maps:long-object-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil.maps:int-int-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil.maps:reference-object-maps:$fastutilVersion")
-    shade("com.github.rfresh2.fastutil.queues:int-queues:$fastutilVersion")
-    shade("net.raphimc:ViaLoader:3.0.1")
-    shade("com.viaversion:viaversion:5.0.1")
-    shade("com.viaversion:viabackwards:5.0.1")
-    shade("org.jline:jline:3.26.2")
-    shade("org.jline:jline-terminal-jni:3.26.2")
-    shade("ar.com.hjg:pngj:2.1.0")
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
-    val lombokVersion = "1.18.34"
+    implementation("com.github.rfresh2:SimpleEventBus:1.2")
+    val fastutilVersion = "8.5.15"
+    implementation("com.github.rfresh2.fastutil.maps:object-object-maps:$fastutilVersion")
+    implementation("com.github.rfresh2.fastutil.maps:int-object-maps:$fastutilVersion")
+    implementation("com.github.rfresh2.fastutil.maps:object-int-maps:$fastutilVersion")
+    implementation("com.github.rfresh2.fastutil.maps:long-object-maps:$fastutilVersion")
+    implementation("com.github.rfresh2.fastutil.maps:int-int-maps:$fastutilVersion")
+    implementation("com.github.rfresh2.fastutil.maps:reference-object-maps:$fastutilVersion")
+    implementation("com.github.rfresh2.fastutil.queues:int-queues:$fastutilVersion")
+    implementation("net.raphimc:ViaLoader:3.0.4")
+    implementation("com.viaversion:viaversion:5.2.1")
+    implementation("com.viaversion:viabackwards:5.2.1")
+    implementation("org.jline:jline:3.28.0")
+    implementation("org.jline:jline-terminal-jni:3.28.0")
+    implementation("ar.com.hjg:pngj:2.1.0")
+    implementation("com.zaxxer:HikariCP:6.2.1")
+    implementation("org.postgresql:postgresql:42.7.4")
+    // todo: 3.46.0 introduces JFR support
+    //  but it causes a runtime exception in graalvm native image if we do not build with JFR support
+    //  which adds about 10mb to the binary size for zero benefit because we do not use jfr
+    implementation("org.jdbi:jdbi3-postgres:3.45.4")
+    implementation("com.google.guava:guava:33.4.0-jre")
+    implementation("ch.qos.logback:logback-classic:1.5.15")
+    implementation("org.slf4j:slf4j-api:2.0.16")
+    implementation("org.slf4j:jul-to-slf4j:2.0.16")
+    implementation("com.mojang:brigadier:1.3.10")
+    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.18.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    val lombokVersion = "1.18.36"
     compileOnly("org.projectlombok:lombok:$lombokVersion")
     testCompileOnly("org.projectlombok:lombok:$lombokVersion")
     annotationProcessor("org.projectlombok:lombok:$lombokVersion")
@@ -125,29 +113,27 @@ tasks {
     withType(JavaCompile::class.java) {
         options.encoding = "UTF-8"
         options.isDeprecation = true
+        options.release = javaReleaseVersion
     }
     test {
         useJUnitPlatform()
     }
-    val commitHashTask = register("writeCommitHash") {
+    val commitHashTask = register<Exec>("writeCommitHash") {
         group = "build"
         description = "Write commit hash / version to file"
+        workingDir = projectDir
+        commandLine = "git rev-parse --short=8 HEAD".split(" ")
+        standardOutput = ByteArrayOutputStream()
         doLast {
-            val byteOut = ByteArrayOutputStream()
-            exec {
-                commandLine = "git rev-parse --short=8 HEAD".split(" ")
-                standardOutput = byteOut
-            }
-            String(byteOut.toByteArray()).trim().let {
-                if (it.length > 5) {
-                    file(layout.buildDirectory.asFile.get().absolutePath + "/resources/main/zenith_commit.txt").apply {
-                        parentFile.mkdirs()
-                        println("Writing commit hash: $it")
-                        writeText(it)
-                    }
-                } else {
-                    println("Unable to determine commit hash")
+            val commitHash = standardOutput.toString().trim()
+            if (commitHash.length > 5) {
+                file(layout.buildDirectory.asFile.get().absolutePath + "/resources/main/zenith_commit.txt").apply {
+                    parentFile.mkdirs()
+                    println("Writing commit hash: $commitHash")
+                    writeText(commitHash)
                 }
+            } else {
+                println("Unable to determine commit hash")
             }
         }
         outputs.upToDateWhen { false }
@@ -175,12 +161,13 @@ tasks {
         classpath = sourceSets.main.get().runtimeClasspath
         mainClass.set("com.zenith.Proxy")
         jvmArgs = listOf("-Xmx300m", "-XX:+UseG1GC")
+        standardInput = System.`in`
         outputs.upToDateWhen { false }
     }
     val javaPathTask = register("javaPath", Task::class.java) {
         group = runGroup
         doLast {
-            val execPath = javaLauncherProvider21.get().executablePath
+            val execPath = javaLauncherProvider.get().executablePath
             // create a file symlinked to the java executable for use in scripts
             layout.buildDirectory.asFile.get().mkdirs()
             if (Os.isFamily(Os.FAMILY_WINDOWS)) {
@@ -202,10 +189,9 @@ tasks {
     jar { enabled = false }
     shadowJar {
         from(collectReachabilityMetadata)
-        archiveBaseName.set(project.name)
-        archiveClassifier.set("")
-        archiveVersion.set("")
-
+        archiveBaseName = project.name
+        archiveClassifier = ""
+        archiveVersion = ""
         configurations = listOf(shade)
 
         exclude(listOf(
@@ -218,7 +204,7 @@ tasks {
             exclude(dependency("org.slf4j:slf4j-api:.*"))
             exclude(dependency("ch.qos.logback:.*:.*"))
             exclude(dependency("org.jline:.*:.*"))
-            exclude(dependency("com.github.rfresh2.Discord4j:discord4j-core:.*"))
+            exclude(dependency("com.github.rfresh2.discord4j:discord4j-core:.*"))
             exclude(dependency("com.github.ben-manes.caffeine:caffeine:.*"))
             exclude(dependency("org.postgresql:postgresql:.*"))
             exclude(dependency("io.netty:netty-codec-http:.*"))
@@ -226,9 +212,6 @@ tasks {
             exclude(dependency("io.netty:netty-resolver-dns:.*"))
             exclude(dependency("org.cloudburstmc.math:api:.*"))
             exclude(dependency("org.cloudburstmc.math:immutable:.*"))
-            exclude(dependency("io.jsonwebtoken:jjwt-api:.*"))
-            exclude(dependency("io.jsonwebtoken:jjwt-gson:.*"))
-            exclude(dependency("io.jsonwebtoken:jjwt-impl:.*"))
             exclude(dependency("com.viaversion:viaversion:.*"))
             exclude(dependency("com.viaversion:viabackwards:.*"))
             exclude(dependency("net.raphimc:ViaLoader:.*"))
@@ -258,7 +241,7 @@ tasks {
 graalvmNative {
     binaries {
         named("main") {
-            javaLauncher = javaLauncherProvider22
+            javaLauncher = javaLauncherProvider
             imageName = "ZenithProxy"
             mainClass = "com.zenith.Proxy"
             quickBuild = false
@@ -270,17 +253,20 @@ graalvmNative {
                 "-H:+ReportExceptionStackTraces",
                 "-H:DeadlockWatchdogInterval=30",
                 "-H:IncludeLocales=en",
+                "-H:+CompactingOldGen",
+//                "--emit build-report",
                 "-R:MaxHeapSize=200m",
                 "-march=x86-64-v3",
                 "--gc=serial",
                 "-J-XX:MaxRAMPercentage=90",
-                "--initialize-at-build-time=org.redisson.misc.BiHashMap",
-                "--initialize-at-build-time=org.redisson.liveobject.core.RedissonObjectBuilder\$CodecMethodRef"
+                "--install-exit-handlers"
+//                "--enable-monitoring=jfr"
             )
             val pgoPath = System.getenv("GRAALVM_PGO_PATH")
             if (pgoPath != null) {
                 println("Using PGO profile: $pgoPath")
                 buildArgs.add("--pgo=$pgoPath")
+                buildArgs.add("-H:+PGOPrintProfileQuality")
             } else {
                 val pgoInstrument = System.getenv("GRAALVM_PGO_INSTRUMENT")
                 if (pgoInstrument != null) {

@@ -9,6 +9,7 @@ import com.zenith.util.Wait;
 import lombok.NonNull;
 import org.geysermc.mcprotocollib.auth.GameProfile;
 import org.geysermc.mcprotocollib.protocol.MinecraftConstants;
+import org.geysermc.mcprotocollib.protocol.data.ProtocolState;
 import org.geysermc.mcprotocollib.protocol.packet.login.clientbound.ClientboundGameProfilePacket;
 
 import java.util.Optional;
@@ -43,7 +44,7 @@ public class SGameProfileOutgoingHandler implements PacketHandler<ClientboundGam
                 transferSrc.ifPresent(s -> SERVER_LOG.info("{} transferring from ZenithProxy instance: {}", clientGameProfile.getName(), s));
                 if (CONFIG.server.onlyZenithTransfers && transferSrc.isEmpty()) {
                     // clients can spoof these cookies easily, but the whitelist would stop them anyway
-                    SERVER_LOG.info("Blocking transfer from non-ZenithProxy source. Username: {} UUID: {} [{}]", clientGameProfile.getName(), clientGameProfile.getIdAsString(), session.getRemoteAddress());
+                    SERVER_LOG.info("Blocking transfer from non-ZenithProxy source. Username: {} UUID: {} MC: {} [{}]", clientGameProfile.getName(), clientGameProfile.getIdAsString(), session.getMCVersion(), session.getRemoteAddress());
                     session.disconnect("Transfer Blocked");
                     return null;
                 }
@@ -53,12 +54,12 @@ public class SGameProfileOutgoingHandler implements PacketHandler<ClientboundGam
                     onlySpectator = Optional.of(true);
                 } else {
                     session.disconnect(CONFIG.server.extra.whitelist.kickmsg);
-                    SERVER_LOG.warn("Username: {} UUID: {} [{}] tried to connect!", clientGameProfile.getName(), clientGameProfile.getIdAsString(), session.getRemoteAddress());
+                    SERVER_LOG.warn("Username: {} UUID: {} [{}] MC: {} tried to connect!", clientGameProfile.getName(), clientGameProfile.getIdAsString(), session.getMCVersion(), session.getRemoteAddress());
                     EVENT_BUS.post(new NonWhitelistedPlayerConnectedEvent(clientGameProfile, session.getRemoteAddress()));
                     return null;
                 }
             }
-            SERVER_LOG.info("Username: {} UUID: {} [{}] has passed the whitelist check!", clientGameProfile.getName(), clientGameProfile.getIdAsString(), session.getRemoteAddress());
+            SERVER_LOG.info("Username: {} UUID: {} MC: {} [{}] has passed the whitelist check!", clientGameProfile.getName(), clientGameProfile.getIdAsString(), session.getMCVersion(), session.getRemoteAddress());
             session.setWhitelistChecked(true);
             final Optional<Boolean> finalOnlySpectator = onlySpectator;
             EXECUTOR.execute(() -> {
@@ -82,6 +83,7 @@ public class SGameProfileOutgoingHandler implements PacketHandler<ClientboundGam
             if (!Proxy.getInstance().isConnected()) {
                     if (CONFIG.client.extra.autoConnectOnLogin && !onlySpectator.orElse(false)) {
                     try {
+                        SERVER_LOG.info("Auto connecting client on player login...");
                         Proxy.getInstance().connect();
                     } catch (final Throwable e) {
                         SERVER_LOG.info("Failed `autoConnectOnLogin` client connect", e);
@@ -99,6 +101,7 @@ public class SGameProfileOutgoingHandler implements PacketHandler<ClientboundGam
                         return;
                     }
                 } else {
+                    SERVER_LOG.info("Disconnecting: {} [{}] ({}) : Not connected to server (AutoConnectOnLogin)!", clientGameProfile.getName(), clientGameProfile.getId(), session.getMCVersion());
                     session.disconnect("Not connected to server!");
                     return;
                 }
@@ -108,6 +111,7 @@ public class SGameProfileOutgoingHandler implements PacketHandler<ClientboundGam
         if (client == null
             || CACHE.getProfileCache().getProfile() == null
             || !(client.isOnline() || client.isInQueue())) {
+            SERVER_LOG.info("Disconnecting: {} [{}] ({}) : Not connected to server!", clientGameProfile.getName(), clientGameProfile.getId(), session.getMCVersion());
             session.disconnect("Not connected to server!");
             return;
         }
@@ -116,7 +120,9 @@ public class SGameProfileOutgoingHandler implements PacketHandler<ClientboundGam
         SERVER_LOG.debug("User UUID: {}\nBot UUID: {}", clientGameProfile.getId().toString(), CACHE.getProfileCache().getProfile().getId().toString());
         session.getProfileCache().setProfile(clientGameProfile);
         if (!onlySpectator.orElse(false) && Proxy.getInstance().getCurrentPlayer().compareAndSet(null, session)) {
+            SERVER_LOG.info("Logging in {} [{}] ({}) as controlling player", clientGameProfile.getName(), clientGameProfile.getId().toString(), session.getMCVersion());
             session.sendAsync(new ClientboundGameProfilePacket(CACHE.getProfileCache().getProfile(), false));
+            session.switchOutboundState(ProtocolState.CONFIGURATION);
             return;
         }
         if (onlySpectator.isPresent() && !onlySpectator.get()) { // the above operation failed and we don't want to be put into spectator
@@ -127,18 +133,19 @@ public class SGameProfileOutgoingHandler implements PacketHandler<ClientboundGam
             session.disconnect("Spectator mode is disabled");
             return;
         }
-        SERVER_LOG.info("Logging in {} [{}] as spectator", clientGameProfile.getName(), clientGameProfile.getId().toString());
+        SERVER_LOG.info("Logging in {} [{}] ({}) as spectator", clientGameProfile.getName(), clientGameProfile.getId().toString(), session.getMCVersion());
         session.setSpectator(true);
         final GameProfile spectatorFakeProfile = new GameProfile(spectatorFakeUUID, clientGameProfile.getName());
         if (clientGameProfile.getProperty("textures") == null) {
                 SessionServerApi.INSTANCE.getProfileAndSkin(clientGameProfile.getId())
                     .ifPresentOrElse(p -> spectatorFakeProfile.setProperties(p.getProperties()),
-                                     () -> SERVER_LOG.info("Failed getting spectator skin for {} [{}]", clientGameProfile.getName(), clientGameProfile.getId().toString()));
+                                     () -> SERVER_LOG.info("Failed getting spectator skin for {} [{}] ({})", clientGameProfile.getName(), clientGameProfile.getId().toString(), session.getMCVersion()));
         } else {
             spectatorFakeProfile.setProperties(clientGameProfile.getProperties());
         }
         session.getSpectatorFakeProfileCache().setProfile(spectatorFakeProfile);
         session.sendAsync(new ClientboundGameProfilePacket(spectatorFakeProfile, false));
+        session.switchOutboundState(ProtocolState.CONFIGURATION);
         return;
     }
 }

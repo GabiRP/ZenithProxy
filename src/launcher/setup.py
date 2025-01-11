@@ -9,7 +9,7 @@ from utils import critical_error
 
 
 def setup_execute(config):
-    if validate_linux_system():  # otherwise we will always select java
+    if validate_linux_system(config):  # otherwise we will always select java
         while True:
             print("Select a ZenithProxy platform: (1/2)")
             print("1. java")
@@ -26,20 +26,24 @@ def setup_execute(config):
     else:
         release_channel = "java"
     print("")
-    while True:
-        print("Select a Minecraft version: (1/2)")
-        print("1. 1.20.4")
-        print("2. 1.21.0")
-        i1 = input("> ")
-        if i1 == "1":
-            minecraft_version = "1.20.4"
-            break
-        elif i1 == "2":
-            minecraft_version = "1.21.0"
-            break
-        else:
-            print("Invalid input. Enter 1 or 2")
-    print("")
+
+    # while True:
+    #     print("Select a Minecraft version: (1/2)")
+    #     print("1. 1.20.4")
+    #     print("2. 1.21.0")
+    #     i1 = input("> ")
+    #     if i1 == "1":
+    #         minecraft_version = "1.20.4"
+    #         break
+    #     elif i1 == "2":
+    #         minecraft_version = "1.21.0"
+    #         break
+    #     else:
+    #         print("Invalid input. Enter 1 or 2")
+    # print("")
+
+    minecraft_version = "1.21.0"
+
     config.auto_update = True
     config.auto_update_launcher = True
     config.release_channel = release_channel + "." + minecraft_version
@@ -48,6 +52,7 @@ def setup_execute(config):
     config.repo_owner = "rfresh2"
     config.repo_name = "ZenithProxy"
     config.write_launch_config()
+    print("launch_config.json written successfully!")
 
     if os.path.exists("config.json"):
         while True:
@@ -118,14 +123,16 @@ def setup_execute(config):
     if discord_bot:
         print("See README.md for Discord bot setup instructions")
         print("https://github.com/rfresh2/ZenithProxy/?tab=readme-ov-file#discord-bot-setup")
+        discord_verify_verbose = False
         while True:
             print("Enter Discord bot token:")
             discord_bot_token = input("> ")
             if len(discord_bot_token) < 50:
                 print("Invalid token")
                 continue
-            if verify_discord_bot_token(discord_bot_token):
+            if verify_discord_bot_token(discord_bot_token, discord_verify_verbose):
                 break
+            discord_verify_verbose = True # verbose on second attempt
         print("")
         while True:
             print("Enter a Discord channel ID to manage ZenithProxy in:")
@@ -228,14 +235,17 @@ def rescue_invalid_system(config):
             critical_error("Invalid system for release channel:", config.release_channel)
 
 
-def verify_discord_bot_token(token):
+def verify_discord_bot_token(token, verbose=False):
     headers = {
-        "Authorization": "Bot " + token
+        "Authorization": "Bot " + token,
+        "User-Agent": "DiscordBot (https://github.com/rfresh2/ZenithProxy, 1.0)"
     }
     try:
         response = requests.get("https://discord.com/api/applications/@me", headers=headers, timeout=10)
         if response.status_code != 200:
             print("Invalid token. Discord API response code:", response.status_code)
+            if verbose:
+                print("Full Discord Response:", response.text)
             return False
         response_json = response.json()
         flags = response_json["flags"]

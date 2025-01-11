@@ -5,15 +5,24 @@ import com.zenith.command.Command;
 import com.zenith.command.CommandUsage;
 import com.zenith.command.brigadier.CommandCategory;
 import com.zenith.command.brigadier.CommandContext;
+import com.zenith.command.brigadier.CommandSource;
 import com.zenith.discord.Embed;
+import discord4j.common.util.Snowflake;
+import discord4j.core.util.MentionUtil;
 
-import static com.zenith.Shared.CONFIG;
-import static com.zenith.Shared.DISCORD;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
+
+import static com.zenith.Shared.*;
+import static com.zenith.command.brigadier.CustomStringArgumentType.getString;
+import static com.zenith.command.brigadier.CustomStringArgumentType.wordWithChars;
 import static com.zenith.command.brigadier.ToggleArgumentType.getToggle;
 import static com.zenith.command.brigadier.ToggleArgumentType.toggle;
 import static java.util.Arrays.asList;
 
 public class ChatRelayCommand extends Command {
+    private static final Pattern CHANNEL_ID_PATTERN = Pattern.compile("<#\\d+>");
+
     @Override
     public CommandUsage commandUsage() {
         return CommandUsage.args(
@@ -31,6 +40,7 @@ public class ChatRelayCommand extends Command {
             """,
             asList(
                 "on/off",
+                "channel <channelId>",
                 "connectionMessages on/off",
                 "whispers on/off",
                 "publicChat on/off",
@@ -48,18 +58,52 @@ public class ChatRelayCommand extends Command {
     @Override
     public LiteralArgumentBuilder<CommandContext> register() {
         return command("chatRelay")
+            .requires(c -> Command.validateCommandSource(c, asList(CommandSource.DISCORD, CommandSource.TERMINAL)))
             .then(argument("toggle", toggle()).executes(c -> {
-                var currentState = CONFIG.discord.chatRelay.enable;
                 CONFIG.discord.chatRelay.enable = getToggle(c, "toggle");
-                if (CONFIG.discord.chatRelay.enable != currentState) {
-                    DISCORD.stop(false);
-                    if (CONFIG.discord.enable)
-                        DISCORD.start();
+                if (CONFIG.discord.chatRelay.enable && CONFIG.discord.chatRelay.channelId.isEmpty()) {
+                    c.getSource().getEmbed()
+                        .title("Error")
+                        .description("Chat Relay channel must be set: `chatRelay channel <channelId>`")
+                        .errorColor();
+                    CONFIG.discord.chatRelay.enable = false;
+                    return OK;
                 }
+                EXECUTOR.execute(this::restartDiscordBot);
                 c.getSource().getEmbed()
                     .title("Chat Relay " + toggleStrCaps(CONFIG.discord.chatRelay.enable));
                 return OK;
             }))
+            .then(literal("channel").requires(Command::validateAccountOwner).then(argument("channelId", wordWithChars()).executes(c -> {
+                String channelId = getString(c, "channelId");
+                if (CHANNEL_ID_PATTERN.matcher(channelId).matches())
+                    channelId = channelId.substring(2, channelId.length() - 1);
+                try {
+                    Snowflake.of(channelId);
+                } catch (final Exception e) {
+                    // invalid id
+                    c.getSource().getEmbed()
+                        .title("Invalid Channel ID")
+                        .description("The channel ID provided is invalid")
+                        .errorColor();
+                    return 1;
+                }
+                if (channelId.equals(CONFIG.discord.channelId)) {
+                    c.getSource().getEmbed()
+                        .title("Invalid Channel ID")
+                        .description("Cannot use the same channel ID for both the relay and main channel")
+                        .errorColor();
+                    return 1;
+                }
+                CONFIG.discord.chatRelay.channelId = channelId;
+                c.getSource().getEmbed()
+                    .title("Channel set!")
+                    .primaryColor()
+                    .description("Discord bot will now restart if enabled");
+                if (DISCORD.isRunning())
+                    EXECUTOR.schedule(this::restartDiscordBot, 3, TimeUnit.SECONDS);
+                return OK;
+            })))
             .then(literal("connectionMessages")
                       .then(argument("toggle", toggle()).executes(c -> {
                             CONFIG.discord.chatRelay.connectionMessages = getToggle(c, "toggle");
@@ -136,6 +180,7 @@ public class ChatRelayCommand extends Command {
     public void postPopulate(final Embed builder) {
         builder
             .addField("Chat Relay", toggleStr(CONFIG.discord.chatRelay.enable), false)
+            .addField("Channel", getChannelMention(CONFIG.discord.chatRelay.channelId), false)
             .addField("Connection Messages", toggleStr(CONFIG.discord.chatRelay.connectionMessages), false)
             .addField("Public Chats", toggleStr(CONFIG.discord.chatRelay.publicChats), false)
             .addField("Whispers", toggleStr(CONFIG.discord.chatRelay.whispers), false)
@@ -147,5 +192,32 @@ public class ChatRelayCommand extends Command {
             .addField("Ignore Queue", toggleStr(CONFIG.discord.chatRelay.ignoreQueue), false)
             .addField("Send Messages", toggleStr(CONFIG.discord.chatRelay.sendMessages), false)
             .primaryColor();
+    }
+
+    private String getChannelMention(final String channelId) {
+        try {
+            return MentionUtil.forChannel(Snowflake.of(channelId));
+        } catch (final Exception e) {
+            // these channels might be unset on purpose
+            DEFAULT_LOG.debug("Invalid channel ID: {}", channelId, e);
+            return "";
+        }
+    }
+
+    private void restartDiscordBot() {
+        DISCORD_LOG.info("Restarting discord bot");
+        try {
+            DISCORD.stop(false);
+            if (CONFIG.discord.enable) {
+                DISCORD.start();
+                DISCORD.sendEmbedMessage(Embed.builder()
+                                             .title("Discord Bot Restarted")
+                                             .successColor());
+            } else {
+                DISCORD_LOG.info("Discord bot is disabled, not starting");
+            }
+        } catch (final Exception e) {
+            DISCORD_LOG.error("Failed to restart discord bot", e);
+        }
     }
 }

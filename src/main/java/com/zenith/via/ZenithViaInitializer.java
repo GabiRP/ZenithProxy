@@ -1,18 +1,15 @@
 package com.zenith.via;
 
-import com.viaversion.viaversion.api.minecraft.entities.EntityTypes1_15;
 import com.viaversion.viaversion.api.protocol.version.ProtocolVersion;
 import com.viaversion.viaversion.connection.UserConnectionImpl;
 import com.viaversion.viaversion.protocol.ProtocolPipelineImpl;
 import com.zenith.Proxy;
-import com.zenith.util.Wait;
-import com.zenith.via.handler.ZViaProtocolStateHandler;
 import io.netty.channel.Channel;
+import io.netty.util.AttributeKey;
 import net.raphimc.vialoader.ViaLoader;
 import net.raphimc.vialoader.impl.platform.ViaBackwardsPlatformImpl;
 import net.raphimc.vialoader.netty.VLPipeline;
 import net.raphimc.vialoader.netty.ViaCodec;
-import org.geysermc.mcprotocollib.network.Session;
 import org.geysermc.mcprotocollib.network.tcp.TcpPacketCodec;
 import org.geysermc.mcprotocollib.protocol.codec.MinecraftCodec;
 
@@ -30,44 +27,27 @@ public class ZenithViaInitializer {
                 new ZenithViaLoader(),
                 null,
                 null,
-                () -> {
-                    // there's some race condition in via loading here that can cause viabackwards to fail its init
-                    // might be related to graalvm compiler optimizations, haven't reproduced on java yet
-                    // this code is just adding some retries very hackily
-                    if (!Wait.waitUntil(() -> {
-                        try {
-                            EntityTypes1_15.PUFFERFISH.getId();
-                            return true;
-                        } catch (final Throwable e) {
-                            return false;
-                        }
-                    }, 5)) {
-                        DEFAULT_LOG.error("Timed out waiting for via entity id mappings to load :(");
-                    }
-                    return new ViaBackwardsPlatformImpl();
-                }
+                ViaBackwardsPlatformImpl::new
             );
         }
     }
 
-    // pipeline order before readTimeout -> encryption -> sizer -> compression -> codec -> manager
-    // pipeline order after readTimeout -> encryption -> sizer -> compression -> via-codec -> codec -> manager
-
-    public void clientViaChannelInitializer(Channel channel, Session client) {
+    public void clientViaChannelInitializer(Channel channel) {
         if (!CONFIG.client.viaversion.enabled) return;
         if (CONFIG.client.viaversion.autoProtocolVersion) updateClientViaProtocolVersion();
         if (CONFIG.client.viaversion.protocolVersion == MinecraftCodec.CODEC.getProtocolVersion()) {
             CLIENT_LOG.warn("ViaVersion enabled but the protocol is the same as ours, connecting without ViaVersion");
-        } else if (Proxy.getInstance().isOn2b2t()) {
+        } else if (CONFIG.client.viaversion.disableOn2b2t && Proxy.getInstance().isOn2b2t()) {
             CLIENT_LOG.warn("ViaVersion enabled but server set to 2b2t.org, connecting without ViaVersion");
         } else {
             init();
             UserConnectionImpl userConnection = new UserConnectionImpl(channel, true);
             new ProtocolPipelineImpl(userConnection);
-            channel.pipeline().addBefore(TcpPacketCodec.ID, ZViaProtocolStateHandler.ID, new ZViaProtocolStateHandler(client));
-            channel.pipeline().addBefore(ZViaProtocolStateHandler.ID, VLPipeline.VIA_CODEC_NAME, new ViaCodec(userConnection));
+            channel.pipeline().addBefore(TcpPacketCodec.ID, VLPipeline.VIA_CODEC_NAME, new ViaCodec(userConnection));
         }
     }
+
+    public static final AttributeKey<UserConnectionImpl> VIA_USER = AttributeKey.newInstance("ViaUser");
 
     public void serverViaChannelInitializer(final Channel channel) {
         if (!CONFIG.server.viaversion.enabled) return;
@@ -75,6 +55,7 @@ public class ZenithViaInitializer {
         var userConnection = new UserConnectionImpl(channel, false);
         new ProtocolPipelineImpl(userConnection);
         channel.pipeline().addBefore(TcpPacketCodec.ID, VLPipeline.VIA_CODEC_NAME, new ViaCodec(userConnection));
+        channel.attr(VIA_USER).set(userConnection);
     }
 
     private void updateClientViaProtocolVersion() {

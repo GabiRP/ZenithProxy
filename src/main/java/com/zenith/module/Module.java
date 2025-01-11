@@ -44,7 +44,7 @@ public abstract class Module {
     }
 
     public synchronized void syncEnabledFromConfig() {
-        setEnabled(shouldBeEnabled());
+        setEnabled(enabledSetting());
     }
 
     public void onEnable() { }
@@ -53,7 +53,7 @@ public abstract class Module {
 
     public abstract void subscribeEvents();
 
-    public abstract boolean shouldBeEnabled();
+    public abstract boolean enabledSetting();
 
     public void sendClientPacketAsync(final Packet packet) {
         ClientSession clientSession = Proxy.getInstance().getClient();
@@ -66,6 +66,17 @@ public abstract class Module {
         ClientSession clientSession = Proxy.getInstance().getClient();
         if (clientSession != null && clientSession.isConnected()) {
             clientSession.send(packet);
+        }
+    }
+
+    public void sendClientPacketAwait(final Packet packet) {
+        ClientSession clientSession = Proxy.getInstance().getClient();
+        if (clientSession != null && clientSession.isConnected()) {
+            try {
+                clientSession.sendAwait(packet);
+            } catch (Exception e) {
+                error("Error sending awaited packet: {}", packet.getClass().getSimpleName(), e);
+            }
         }
     }
 
@@ -106,14 +117,14 @@ public abstract class Module {
     }
 
     public void warn(String msg) {
-        MODULE_LOG.warn(msg);
+        MODULE_LOG.warn(moduleLogPrefix + msg);
     }
 
     public void warn(String msg, Object... args) {
         MODULE_LOG.warn(moduleLogPrefix + msg, args);
     }
 
-    protected final String moduleAlertPrefix = "&7[&b" + this.getClass().getSimpleName() + "&7]&r ";
+    protected final String moduleAlertPrefix = "<gray>[<aqua>" + this.getClass().getSimpleName() + "<gray>]<reset> ";
 
     public void inGameAlert(String minedown) {
         var connections = Proxy.getInstance().getActiveConnections().getArray();

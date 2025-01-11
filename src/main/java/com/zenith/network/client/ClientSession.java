@@ -13,16 +13,18 @@ import io.netty.util.concurrent.DefaultThreadFactory;
 import lombok.Getter;
 import lombok.Setter;
 import net.kyori.adventure.text.Component;
+import org.geysermc.mcprotocollib.auth.GameProfile;
 import org.geysermc.mcprotocollib.network.ProxyInfo;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.network.tcp.TcpClientSession;
 import org.geysermc.mcprotocollib.network.tcp.TcpConnectionManager;
+import org.geysermc.mcprotocollib.protocol.MinecraftConstants;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.ProtocolState;
 import org.geysermc.mcprotocollib.protocol.data.handshake.HandshakeIntent;
 import org.geysermc.mcprotocollib.protocol.packet.handshake.serverbound.ClientIntentionPacket;
+import org.geysermc.mcprotocollib.protocol.packet.login.serverbound.ServerboundHelloPacket;
 
-import java.io.IOException;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
@@ -33,7 +35,6 @@ import static java.util.Objects.isNull;
 @Setter
 public class ClientSession extends TcpClientSession {
     private final EventLoop eventLoop = new DefaultEventLoop(new DefaultThreadFactory("Client Event Loop", true));
-    protected boolean serverProbablyOff;
     protected long ping = 0L;
     protected long lastPingId = 0L;
     protected long lastPingSentTime = 0L;
@@ -67,14 +68,7 @@ public class ClientSession extends TcpClientSession {
     @Override
     public void disconnect(Component reason, Throwable cause) {
         super.disconnect(reason, cause);
-        serverProbablyOff = false;
-        if (cause == null) {
-            serverProbablyOff = true;
-        } else if (cause instanceof IOException)    {
-            CLIENT_LOG.error("Error during client disconnect", cause);
-        } else {
-            CLIENT_LOG.error("", cause);
-        }
+        if (cause != null) CLIENT_LOG.error("Exception during client disconnect", cause);
         this.online = false;
     }
 
@@ -86,7 +80,7 @@ public class ClientSession extends TcpClientSession {
     @Override
     public void callPacketReceived(Packet packet) {
         try {
-            var state = this.getPacketProtocol().getState();
+            var state = this.getPacketProtocol().getInboundState();
             final Packet p = ZenithHandlerCodec.CLIENT_REGISTRY.handleInbound(packet, this);
             if (p != null && (state == ProtocolState.GAME || state == ProtocolState.CONFIGURATION)) {
                 // sends on each connection's own event loop
@@ -98,7 +92,7 @@ public class ClientSession extends TcpClientSession {
                 }
             }
         } catch (Exception e) {
-            CLIENT_LOG.error("", e);
+            CLIENT_LOG.error("Client Packet Received Error", e);
             throw new RuntimeException(e);
         }
     }
@@ -108,7 +102,7 @@ public class ClientSession extends TcpClientSession {
         try {
             return ZenithHandlerCodec.CLIENT_REGISTRY.handleOutgoing(packet, this);
         } catch (Exception e) {
-            CLIENT_LOG.error("", e);
+            CLIENT_LOG.error("Client Packet Sending Error", e);
             throw new RuntimeException(e);
         }
     }
@@ -118,14 +112,14 @@ public class ClientSession extends TcpClientSession {
         try {
             ZenithHandlerCodec.CLIENT_REGISTRY.handlePostOutgoing(packet, this);
         } catch (Exception e) {
-            CLIENT_LOG.error("", e);
+            CLIENT_LOG.error("Client Packet Sent Error", e);
             throw new RuntimeException(e);
         }
     }
 
     @Override
     public boolean callPacketError(Throwable throwable) {
-        CLIENT_LOG.debug("", throwable);
+        CLIENT_LOG.debug("Packet Error", throwable);
         return true;
     }
 
@@ -133,8 +127,12 @@ public class ClientSession extends TcpClientSession {
     public void callConnected() {
         CLIENT_LOG.info("Connected to {}!", getRemoteAddress());
         this.setDisconnected(false);
+        switchInboundState(ProtocolState.LOGIN);
         send(new ClientIntentionPacket(getPacketProtocol().getCodec().getProtocolVersion(), getHost(), getPort(), HandshakeIntent.LOGIN));
+        switchOutboundState(ProtocolState.LOGIN);
         EVENT_BUS.postAsync(new ConnectEvent());
+        GameProfile profile = getFlag(MinecraftConstants.PROFILE_KEY);
+        send(new ServerboundHelloPacket(profile.getName(), profile.getId()));
         if (CONFIG.client.ping.mode == Config.Client.Ping.Mode.PACKET) EXECUTOR.execute(new ClientPacketPingTask(this));
     }
 
@@ -167,9 +165,10 @@ public class ClientSession extends TcpClientSession {
         }
         CLIENT_LOG.info("Disconnected: {}", reasonStr);
         var onlineDuration = Duration.ofSeconds(Proxy.getInstance().getOnlineTimeSeconds());
+        var onlineDurationWithQueueSkip = Duration.ofSeconds(Proxy.getInstance().getOnlineTimeSecondsWithQueueSkip());
         // stop processing packets before we reset the client cache to avoid race conditions
         getClientEventLoop().shutdownGracefully(0L, 15L, TimeUnit.SECONDS).awaitUninterruptibly();
-        EVENT_BUS.post(new DisconnectEvent(reasonStr, onlineDuration, Proxy.getInstance().isInQueue(), Proxy.getInstance().getQueuePosition()));
+        EVENT_BUS.post(new DisconnectEvent(reasonStr, onlineDuration, onlineDurationWithQueueSkip, Proxy.getInstance().isInQueue(), Proxy.getInstance().getQueuePosition()));
     }
 
     public EventLoop getClientEventLoop() {

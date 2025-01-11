@@ -1,6 +1,6 @@
 package com.zenith.feature.queue.mcping;
 
-import com.zenith.feature.queue.mcping.data.FinalResponse;
+import com.zenith.feature.queue.mcping.data.MCResponse;
 import org.junit.jupiter.api.Assertions;
 
 import java.io.IOException;
@@ -10,12 +10,11 @@ import java.util.regex.Pattern;
 public class PingTest {
 //    @Test
     public void test() throws IOException {
-        final MCPing mcPing = new MCPing();
         final Pattern digitPattern = Pattern.compile("\\d+");
-        final FinalResponse pingWithDetails = mcPing.ping("connect.2b2t.org", 25565, 3000, false);
-        final String queueStr = pingWithDetails.getPlayers().getSample().get(1).getName();
+        final MCResponse pingWithDetails = MCPing.INSTANCE.ping("connect.2b2t.org", 25565, 3000, false);
+        final String queueStr = pingWithDetails.players().sample().get(1).name();
         final Matcher regularQMatcher = digitPattern.matcher(queueStr.substring(queueStr.lastIndexOf(" ")));
-        final String prioQueueStr = pingWithDetails.getPlayers().getSample().get(2).getName();
+        final String prioQueueStr = pingWithDetails.players().sample().get(2).name();
         final Matcher prioQMatcher = digitPattern.matcher(prioQueueStr.substring(prioQueueStr.lastIndexOf(" ")));
         if (!queueStr.contains("Queue")) {
             throw new IOException("Queue string doesn't contain Queue: " + queueStr);
@@ -36,8 +35,7 @@ public class PingTest {
 
 //    @Test
     public void protocolVersionDetectorTest() throws IOException {
-        var mcPing = new MCPing();
-        var version = mcPing.getProtocolVersion("2b2t.org", 25565, 3000, true);
+        var version = MCPing.INSTANCE.getProtocolVersion("2b2t.org", 25565, 3000, true);
         Assertions.assertEquals(765, version);
     }
 }

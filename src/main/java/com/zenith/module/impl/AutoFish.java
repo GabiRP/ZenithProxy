@@ -22,7 +22,7 @@ import static com.github.rfresh2.EventConsumer.of;
 import static com.zenith.Shared.*;
 
 public class AutoFish extends AbstractInventoryModule {
-    private final Timer castTimer = Timer.newTickTimer();
+    private final Timer castTimer = Timer.createTickTimer();
     private int fishHookEntityId = -1;
     private Hand rodHand = Hand.MAIN_HAND;
     private int delay = 0;
@@ -47,7 +47,7 @@ public class AutoFish extends AbstractInventoryModule {
     }
 
     @Override
-    public boolean shouldBeEnabled() {
+    public boolean enabledSetting() {
         return CONFIG.client.extra.autoFish.enabled;
     }
 
@@ -120,8 +120,8 @@ public class AutoFish extends AbstractInventoryModule {
 
     private boolean hasRotation() {
         var sim = MODULE.get(PlayerSimulation.class);
-        return MathHelper.isNear(MathHelper.wrapYaw(sim.getYaw()), CONFIG.client.extra.autoFish.yaw, 0.1f)
-            && MathHelper.isNear(MathHelper.wrapPitch(sim.getPitch()), CONFIG.client.extra.autoFish.pitch, 0.1f);
+        return MathHelper.isYawInRange(sim.getYaw(), CONFIG.client.extra.autoFish.yaw, 0.1f)
+            && MathHelper.isPitchInRange(sim.getPitch(), CONFIG.client.extra.autoFish.pitch, 0.1f);
     }
 
     private boolean isRodInHand() {

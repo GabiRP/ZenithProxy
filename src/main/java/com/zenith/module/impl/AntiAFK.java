@@ -21,10 +21,10 @@ import static com.zenith.Shared.*;
 import static java.util.Arrays.asList;
 
 public class AntiAFK extends Module {
-    private final Timer swingTickTimer = Timer.newTickTimer();
-    private final Timer startWalkTickTimer = Timer.newTickTimer();
-    private final Timer rotateTimer = Timer.newTickTimer();
-    private final Timer jumpTimer = Timer.newTickTimer();
+    private final Timer swingTickTimer = Timer.createTickTimer();
+    private final Timer startWalkTickTimer = Timer.createTickTimer();
+    private final Timer rotateTimer = Timer.createTickTimer();
+    private final Timer jumpTimer = Timer.createTickTimer();
     private boolean shouldWalk = false;
     private final List<WalkDirection> walkDirections = asList(
             new WalkDirection(1, 0), new WalkDirection(-1, 0),
@@ -51,7 +51,7 @@ public class AntiAFK extends Module {
     }
 
     @Override
-    public boolean shouldBeEnabled() {
+    public boolean enabledSetting() {
         return CONFIG.client.extra.antiafk.enabled;
     }
 
@@ -77,9 +77,9 @@ public class AntiAFK extends Module {
     }
 
     private void sneakTick() {
-        PATHING.move(
-                new Input(false, false, false, false, false, true, false),
-                MOVEMENT_PRIORITY - 1);
+        var sneakInput = new Input();
+        sneakInput.sneaking = true;
+        PATHING.move(sneakInput, MOVEMENT_PRIORITY - 1);
     }
 
     public void handleDeathEvent(final DeathEvent event) {
@@ -139,12 +139,12 @@ public class AntiAFK extends Module {
                 shouldWalk = false;
             } else {
                 if (!MODULE.get(PlayerSimulation.class).isTouchingWater() && (CONFIG.client.extra.antiafk.actions.safeWalk || CONFIG.client.extra.antiafk.actions.sneak))
-                    PATHING.moveRotSneakTowardsBlockPos(currentPathingGoal.getX(),
-                                                        currentPathingGoal.getZ(),
+                    PATHING.moveRotSneakTowardsBlockPos(currentPathingGoal.x(),
+                                                        currentPathingGoal.z(),
                                                         MOVEMENT_PRIORITY);
                 else
-                    PATHING.moveRotTowardsBlockPos(currentPathingGoal.getX(),
-                                                    currentPathingGoal.getZ(),
+                    PATHING.moveRotTowardsBlockPos(currentPathingGoal.x(),
+                                                    currentPathingGoal.z(),
                                                     MOVEMENT_PRIORITY);
             }
         }
@@ -153,7 +153,7 @@ public class AntiAFK extends Module {
     private boolean reachedPathingGoal() {
         final int px = MathHelper.floorI(Pathing.getCurrentPlayerX());
         final int pz = MathHelper.floorI(Pathing.getCurrentPlayerZ());
-        return px == currentPathingGoal.getX() && pz == currentPathingGoal.getZ();
+        return px == currentPathingGoal.x() && pz == currentPathingGoal.z();
     }
 
     private void swingTick() {

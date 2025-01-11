@@ -1,14 +1,16 @@
 package com.zenith.feature.queue;
 
 import com.zenith.feature.api.vcapi.VcApi;
+import com.zenith.feature.api.vcapi.model.QueueEtaEquationResponse;
 import com.zenith.feature.queue.mcping.MCPing;
-import com.zenith.feature.queue.mcping.data.FinalResponse;
+import com.zenith.feature.queue.mcping.data.MCResponse;
 import lombok.Getter;
 
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZonedDateTime;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -19,21 +21,33 @@ public class Queue {
     @Getter
     private static QueueStatus queueStatus = new QueueStatus(0, 0, 0);
     private static final Pattern digitPattern = Pattern.compile("\\d+");
-    private static final MCPing mcPing = new MCPing();
     private volatile static Instant lastUpdate = Instant.EPOCH;
+    private static QueueEtaEquationResponse queueEtaEquation = new QueueEtaEquationResponse(343.0, 0.743);
+    private static Instant lastQueueEtaEquationUpdate = Instant.EPOCH;
 
     public static void start() {
         EXECUTOR.scheduleAtFixedRate(
             () -> Thread.ofVirtual().name("Queue Update").start(Queue::updateQueueStatus),
             500L,
-            Duration.ofMinutes(CONFIG.server.queueStatusRefreshMinutes).toMillis(),
-            TimeUnit.MILLISECONDS);
+            CONFIG.server.queueStatusRefreshMinutes,
+            TimeUnit.MINUTES);
+        EXECUTOR.scheduleAtFixedRate(
+            () -> Thread.ofVirtual().name("Queue ETA Update").start(Queue::updateQueueEtaEquation),
+            500L,
+            6,
+            TimeUnit.HOURS
+        );
     }
 
     public static void updateQueueStatus() {
         // prevent certain situations where users get a ton of these requests queued up somehow
         // maybe due to losing internet?
         if (lastUpdate.isAfter(Instant.now().minus(Duration.ofMinutes(CONFIG.server.queueStatusRefreshMinutes)))) return;
+        updateQueueStatusNow();
+    }
+
+    public static void updateQueueStatusNow() {
+        if (lastUpdate.isAfter(Instant.now().minus(Duration.ofSeconds(5)))) return; // avoid getting rate limited by tcpshield
         lastUpdate = Instant.now();
         if (!pingUpdate()) {
             if (!apiUpdate()) {
@@ -44,7 +58,7 @@ public class Queue {
 
     // returns seconds until estimated queue completion time
     public static long getQueueWait(final Integer queuePos) {
-        return (long) (247 * (Math.pow(queuePos.doubleValue(), 0.885)));
+        return (long) (queueEtaEquation.factor() * (Math.pow(queuePos.doubleValue(), queueEtaEquation.pow())));
     }
 
     public static String getEtaStringFromSeconds(final long totalSeconds) {
@@ -63,10 +77,10 @@ public class Queue {
 
     public static boolean pingUpdate() {
         try {
-            final FinalResponse pingWithDetails = mcPing.ping("connect.2b2t.org", 25565, 3000, false);
-            final String queueStr = pingWithDetails.getPlayers().getSample().get(1).getName();
+            final MCResponse pingWithDetails = MCPing.INSTANCE.ping("connect.2b2t.org", 25565, 3000, false);
+            final String queueStr = pingWithDetails.players().sample().get(1).name();
             final Matcher regularQMatcher = digitPattern.matcher(queueStr.substring(queueStr.lastIndexOf(" ")));
-            final String prioQueueStr = pingWithDetails.getPlayers().getSample().get(2).getName();
+            final String prioQueueStr = pingWithDetails.players().sample().get(2).name();
             final Matcher prioQMatcher = digitPattern.matcher(prioQueueStr.substring(prioQueueStr.lastIndexOf(" ")));
             if (!queueStr.contains("Queue")) {
                 throw new IOException("Queue string doesn't contain Queue: " + queueStr);
@@ -98,6 +112,23 @@ public class Queue {
         } catch (final Exception e) {
             SERVER_LOG.error("Failed updating queue status from API", e);
             return false;
+        }
+    }
+
+    public static void updateQueueEtaEquation() {
+        if (!CONFIG.server.dynamicQueueEtaEquation) return;
+        if (lastQueueEtaEquationUpdate.isAfter(Instant.now().minus(Duration.ofHours(1)))) return;
+        try {
+            queueEtaEquation = VcApi.INSTANCE.getQueueEtaEquation().orElseThrow();
+            lastQueueEtaEquationUpdate = Instant.now();
+        } catch (final Exception e) {
+            var nextWaitMinutes = ThreadLocalRandom.current().nextInt(1, 6);
+            SERVER_LOG.debug("Error fetching queue ETA equation. Retrying in {} minutes", nextWaitMinutes, e);
+            EXECUTOR.schedule(
+                Queue::updateQueueEtaEquation,
+                nextWaitMinutes,
+                TimeUnit.MINUTES
+            );
         }
     }
 }
