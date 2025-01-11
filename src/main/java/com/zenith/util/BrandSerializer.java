@@ -6,7 +6,7 @@ import org.geysermc.mcprotocollib.protocol.codec.MinecraftCodecHelper;
 
 @UtilityClass
 public class BrandSerializer {
-    private static final String BRAND = "ZenithProxy";
+    private static final String BRAND = "Fabric";
 
     public static byte[] defaultBrand(final MinecraftCodecHelper codec) {
         final var byteBuf = Unpooled.buffer(100);
