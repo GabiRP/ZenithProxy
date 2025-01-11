@@ -43,7 +43,7 @@ public class ChatDatabase extends LiveDatabase {
         );
     }
 
-
+    //todo: get custom message
     public void handleServerChatReceivedEvent(ServerChatReceivedEvent event) {
         if (!Proxy.getInstance().isOn2b2t() // only write on 2b2t
                 || Proxy.getInstance().isInQueue()  // ignore queue
