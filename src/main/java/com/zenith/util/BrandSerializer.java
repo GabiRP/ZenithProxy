@@ -6,7 +6,7 @@ import org.geysermc.mcprotocollib.protocol.codec.MinecraftCodecHelper;
 
 @UtilityClass
 public class BrandSerializer {
-    private static final String BRAND = "Fabric";
+    private static final String BRAND = "fabric";
 
     public static byte[] defaultBrand(final MinecraftCodecHelper codec) {
         final var byteBuf = Unpooled.buffer(100);
@@ -22,8 +22,7 @@ public class BrandSerializer {
         final var inBuf = Unpooled.wrappedBuffer(original);
         final var outBuf = Unpooled.buffer(100);
         final var originalStr = codec.readString(inBuf);
-        final var appendedStr = originalStr + " (" + BRAND + ")";
-        codec.writeString(outBuf, appendedStr);
+        codec.writeString(outBuf, originalStr);
         final var bytes = new byte[outBuf.readableBytes()];
         outBuf.readBytes(bytes);
         outBuf.release();
